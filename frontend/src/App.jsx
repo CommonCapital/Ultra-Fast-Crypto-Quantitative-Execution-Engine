@@ -8,6 +8,29 @@ function App() {
   const { data, globalData, status } = useWebSocket('ws://localhost:8000/ws');
   const [alerts, setAlerts] = useState([]);
   const [activePair, setActivePair] = useState('BTC/USDT');
+  const [targetProfit, setTargetProfit] = useState(0.5);
+
+  useEffect(() => {
+    if (globalData?.target_net_profit !== undefined) {
+      setTargetProfit(globalData.target_net_profit);
+    }
+  }, [globalData?.target_net_profit]);
+
+  const handleProfitChange = async (val) => {
+    const num = parseFloat(val);
+    if (!isNaN(num)) {
+      setTargetProfit(num);
+      try {
+        await fetch('http://localhost:8000/api/config/net-profit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_pct: num })
+        });
+      } catch (err) {
+        console.error("Error setting net profit target:", err);
+      }
+    }
+  };
 
   // Find the selected pair data
   const primaryPairData = data.find(p => p.pair === activePair) || (data.length > 0 ? data[0] : null);
@@ -18,13 +41,20 @@ function App() {
       data.forEach(pairData => {
         if (pairData?.opportunity?.alert_message) {
           setAlerts(prev => {
+            const now = Date.now();
             const newAlert = {
               time: new Date().toLocaleTimeString(),
               pair: pairData.pair,
-              message: pairData.opportunity.alert_message
+              message: pairData.opportunity.alert_message,
+              timestamp: now
             };
-            // Avoid duplicates if same message
-            if (prev.length > 0 && prev[0].message === newAlert.message) return prev;
+            // Avoid flooding: check if we already recorded an alert for this pair within the last 60 seconds
+            if (prev.length > 0) {
+              const lastForPair = prev.find(a => a.pair === newAlert.pair);
+              if (lastForPair && (now - lastForPair.timestamp < 60000)) {
+                return prev;
+              }
+            }
             return [newAlert, ...prev].slice(0, 50); // keep last 50
           });
         }
@@ -37,11 +67,32 @@ function App() {
 
   return (
     <div className="dashboard-container">
-      <header>
-        <h1>Ultra-Fast Crypto Quantitative Execution Engine</h1>
-        <div className="status-bar">
-          <div className="pulse" style={{ backgroundColor: status === 'Connected' ? 'var(--success)' : 'var(--danger)' }}></div>
-          Status: {status}
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <h1>Ultra-Fast Crypto Quantitative Execution Engine</h1>
+          <div className="status-bar" style={{ justifyContent: 'flex-start', marginTop: '0.5rem' }}>
+            <div className="pulse" style={{ backgroundColor: status === 'Connected' ? 'var(--success)' : 'var(--danger)' }}></div>
+            Status: {status}
+          </div>
+        </div>
+        
+        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '0.8rem 1.2rem', borderRadius: '8px', border: '1px solid var(--accent-primary)', display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: '300px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 'bold' }}>
+            <span>🎯 Target Net Profit:</span>
+            <span style={{ color: 'var(--accent-glow)' }}>{targetProfit}% Net</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+            <input 
+              type="range" 
+              min="0.01" 
+              max="2.00" 
+              step="0.01" 
+              value={targetProfit} 
+              onChange={(e) => handleProfitChange(e.target.value)}
+              style={{ flex: 1, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+            />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Dynamic Gross Gate: {(parseFloat(targetProfit) + 0.2).toFixed(2)}% (Standard 0.1% Fee Venues) | {(parseFloat(targetProfit) + 0.8).toFixed(2)}% (Coinbase 0.4% Venue)</span>
+          </div>
         </div>
       </header>
 
@@ -127,6 +178,20 @@ function App() {
                   <span>Sell (Shorts):</span>
                   <span>{primaryPairData?.prices?.Coinbase?.short_liq?.toFixed(2) || '0.00'}</span>
                 </div>
+                {primaryPairData?.signals?.stop_loss_pool_status && (
+                  <div style={{ 
+                    fontSize: '0.75rem', 
+                    marginTop: '0.4rem', 
+                    paddingTop: '0.5rem', 
+                    borderTop: '1px solid rgba(255,255,255,0.05)',
+                    color: primaryPairData.signals.stop_loss_pool_status.includes('Squeeze') ? 'var(--success)' : (primaryPairData.signals.stop_loss_pool_status.includes('Cascade') ? 'var(--danger)' : 'var(--text-muted)'),
+                    fontWeight: 'bold',
+                    lineHeight: '1.4',
+                    textAlign: 'left'
+                  }}>
+                    {primaryPairData.signals.stop_loss_pool_status}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -217,10 +282,23 @@ function App() {
                     {primaryPairData?.signals?.dearest_status || 'Fair Value'}
                   </span>
                 </div>
-                {primaryPairData?.signals?.mean_reversion_growth > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--success)', marginTop: '0.2rem', fontSize: '0.75rem', fontWeight: 'bold', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.4rem' }}>
-                    <span>📈 Underpriced Reversion Snap:</span>
-                    <span>+{primaryPairData.signals.mean_reversion_growth}% Snap Up</span>
+                {primaryPairData?.signals?.liquidity_pull_status && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.2rem', fontSize: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>🧲 High Density Liq Magnet:</span>
+                      <span style={{ 
+                        fontWeight: 'bold', 
+                        color: primaryPairData.signals.liquidity_pull_status.includes('Reached') ? 'var(--accent-glow)' : (primaryPairData.signals.liquidity_pull_status.includes('Reaching') ? 'var(--success)' : 'var(--text-main)')
+                      }}>
+                        {primaryPairData.signals.liquidity_pull_status}
+                      </span>
+                    </div>
+                    {primaryPairData?.signals?.mean_reversion_growth > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--success)', fontWeight: 'bold' }}>
+                        <span>📈 Underpriced Alpha Reversion:</span>
+                        <span>+{primaryPairData.signals.mean_reversion_growth}% Snap Up</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -245,6 +323,7 @@ function App() {
                 const title = typeof article === 'string' ? article : article.title;
                 const link = typeof article === 'string' ? '#' : article.link;
                 const summary = typeof article === 'string' ? 'AI News Radar: Scanned for high-impact liquidity and macro risk catalysts.' : article.summary;
+                const pubdate = typeof article === 'string' ? '' : article.pubdate;
                 
                 return (
                   <a key={idx} href={link} target="_blank" rel="noreferrer" style={{ 
@@ -266,7 +345,10 @@ function App() {
                     <div style={{ flex: 1, textAlign: 'left' }}>
                       <div style={{ fontWeight: '600', color: 'var(--text-main)', fontSize: '1rem', marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span>{title}</span>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)' }}>Read Article ↗</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+                          {pubdate && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>🕒 {pubdate}</span>}
+                          <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: 'bold' }}>Read ↗</span>
+                        </div>
                       </div>
                       <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>{summary}</div>
                     </div>

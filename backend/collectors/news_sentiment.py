@@ -23,10 +23,10 @@ BULLISH_KEYWORDS = {
     "win": 25, "recovers": 20, "gain": 25, "rally": 30, "soars": 35, "soar": 35, "pump": 25
 }
 
-# Flawless Google News RSS aggregators for Crypto and Macro Geopolitics
+# Flawless Google News RSS aggregators for Crypto and Macro Geopolitics (strictly limited to the last 24 hours)
 RSS_FEEDS = [
-    "https://news.google.com/rss/search?q=cryptocurrency+bitcoin+ethereum+solana&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=geopolitics+global+economy+fed+interest+rates&hl=en-US&gl=US&ceid=US:en"
+    "https://news.google.com/rss/search?q=cryptocurrency+bitcoin+ethereum+solana+when:24h&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=geopolitics+global+economy+fed+interest+rates+when:24h&hl=en-US&gl=US&ceid=US:en"
 ]
 
 HEADERS = {
@@ -43,17 +43,20 @@ async def fetch_rss_feed(client: httpx.AsyncClient, url: str) -> list:
                 title_elem = item.find("title")
                 desc_elem = item.find("description")
                 link_elem = item.find("link")
+                pubdate_elem = item.find("pubDate")
                 
                 title = title_elem.text if title_elem is not None else ""
                 desc = desc_elem.text if desc_elem is not None else ""
                 link = link_elem.text if link_elem is not None else ""
+                pubdate = pubdate_elem.text if pubdate_elem is not None else ""
                 
                 # Clean html tags
                 clean_title = html.unescape(re.sub(r'<[^>]+>', '', title))
                 clean_desc = html.unescape(re.sub(r'<[^>]+>', '', desc))
+                clean_pubdate = pubdate.replace(" GMT", "").replace(" +0000", "") if pubdate else "Just now"
                 
                 if clean_title:
-                    headlines.append({"title": clean_title, "summary": clean_desc, "link": link})
+                    headlines.append({"title": clean_title, "summary": clean_desc, "link": link, "pubdate": clean_pubdate})
     except Exception as e:
         logger.warning(f"Error fetching RSS {url}: {e}")
     return headlines
@@ -103,7 +106,8 @@ async def start_news_sentiment_collector(redis_client, pairs):
                         top_articles.append({
                             "title": h["title"],
                             "link": h["link"],
-                            "summary": h["summary"][:140] + "..." if len(h["summary"]) > 140 else h["summary"]
+                            "summary": h["summary"][:140] + "..." if len(h["summary"]) > 140 else h["summary"],
+                            "pubdate": h.get("pubdate", "Just now")
                         })
                         if len(top_articles) >= 10:
                             break

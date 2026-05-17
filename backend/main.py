@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import redis
 
 # Internal modules
@@ -39,6 +40,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class ProfitTargetPayload(BaseModel):
+    target_pct: float
+
+@app.post("/api/config/net-profit")
+async def set_net_profit_target(payload: ProfitTargetPayload):
+    target = max(0.01, min(10.0, payload.target_pct))
+    redis_client.set("config:min_net_spread", str(target))
+    return {"status": "success", "target_pct": target}
+
 async def broadcast_loop():
     """Background task to broadcast state to WS clients and detect arbitrage."""
     cycle_counter = 0
@@ -69,9 +79,16 @@ async def broadcast_loop():
                         short_liq = coinbase_data.get('short_liq', 0)
                         long_liq = coinbase_data.get('long_liq', 0)
                         liq_score = 50
+                        stop_loss_pool_status = "Balanced L2 Book"
                         if short_liq + long_liq > 0:
                             # Higher short liq = higher probability of short squeeze = bullish
                             liq_score = (short_liq / (short_liq + long_liq)) * 100
+                            if short_liq > long_liq * 1.15:
+                                ratio = round((short_liq / max(1.0, long_liq)), 2)
+                                stop_loss_pool_status = f"🔥 Heavy Short Squeeze Pool (Asks {ratio}x Bids sitting above current price - Hunting Stop-Losses!)"
+                            elif long_liq > short_liq * 1.15:
+                                ratio = round((long_liq / max(1.0, short_liq)), 2)
+                                stop_loss_pool_status = f"🩸 Heavy Long Liquidation Pool (Bids {ratio}x Asks sitting below current price - Cascade Dump Risk!)"
                             
                         valid_prices = []
                         valid_exchanges_map = {}
@@ -93,6 +110,11 @@ async def broadcast_loop():
                         gross_spread_pct = 0.0
                         cheapest_status = "Fair Value"
                         dearest_status = "Fair Value"
+                        cheapest_diff = 0.0
+                        dearest_diff = 0.0
+                        
+                        raw_target = redis_client.get("config:min_net_spread")
+                        target_net_profit = float(raw_target) if raw_target is not None else settings.MIN_NET_SPREAD
                         
                         if len(valid_prices) >= 2:
                             max_p = max(valid_prices)
@@ -114,18 +136,25 @@ async def broadcast_loop():
                                 cheapest_diff = ((min_p - median_p) / median_p) * 100
                                 dearest_diff = ((max_p - median_p) / median_p) * 100
                                 
-                                if cheapest_diff <= -0.7:
-                                    cheapest_status = f"Underpriced (-{abs(round(cheapest_diff, 2))}%)"
+                                exchange_taker_fee_pct = settings.EXCHANGE_FEES.get(cheapest_exchange, 0.001) * 100
+                                round_trip_fee_pct = exchange_taker_fee_pct * 2
+                                required_gross_discount = target_net_profit + round_trip_fee_pct
+                                
+                                abs_underpricing_pct = abs(cheapest_diff) if cheapest_diff < 0 else 0.0
+                                
+                                if abs_underpricing_pct >= required_gross_discount:
+                                    cheapest_status = f"Underpriced (-{round(abs_underpricing_pct, 2)}%)"
                                 else:
                                     cheapest_status = "Fair Value"
                                     
-                                if dearest_diff >= 0.7:
+                                if dearest_diff >= required_gross_discount:
                                     dearest_status = f"Overpriced (+{round(dearest_diff, 2)}%)"
                                 else:
                                     dearest_status = "Fair Value"
                                     
-                            # Tracking Underpriced Mean Reversion (Alpha Snap)
+                            # Tracking Underpriced Mean Reversion (Alpha Snap) & High Density Liquidity Pull
                             snap_growth_pct = 0.0
+                            liquidity_pull_status = "Standby (Equilibrium Active)"
                             if cheapest_exchange and cheapest_exchange != "N/A":
                                 track_key = f"track:underpriced:{pair}:{cheapest_exchange}"
                                 cached_track = redis_client.get(track_key)
@@ -134,18 +163,28 @@ async def broadcast_loop():
                                 if cached_track:
                                     track_data = json.loads(cached_track)
                                     start_p = track_data["start_price"]
+                                    target_median_p = track_data["start_median"]
                                     
                                     if current_min_p > start_p:
                                         snap_growth_pct = ((current_min_p - start_p) / start_p) * 100
                                         
-                                    if current_min_p >= median_p:
-                                        redis_client.delete(track_key)
-                                elif cheapest_diff < -0.1: # Underpriced by > 0.1% vs median
+                                    if current_min_p >= target_median_p or current_min_p >= median_p:
+                                        liquidity_pull_status = "Reached High Density Liquidity Pull (Target Met 🎯)"
+                                    else:
+                                        price_gap = target_median_p - start_p
+                                        if price_gap > 0:
+                                            progress_pct = ((current_min_p - start_p) / price_gap) * 100
+                                            progress_pct = max(0.0, min(99.9, progress_pct))
+                                            liquidity_pull_status = f"Reaching Liquidity Pull ({round(progress_pct, 1)}% Complete 🧲)"
+                                        else:
+                                            liquidity_pull_status = "Sniping Initial Discount ⚡"
+                                elif cheapest_diff <= -0.1: # Underpriced by > 0.1% vs median
                                     redis_client.set(track_key, json.dumps({
                                         "ts": datetime.now(timezone.utc).isoformat(),
                                         "start_price": current_min_p,
                                         "start_median": median_p
-                                    }), ex=300)
+                                    }), ex=180)
+                                    liquidity_pull_status = f"Sniping Initial Discount ({round(cheapest_diff, 2)}% Dislocation ⚡)"
                                     
                         confidence = (vol_score * 0.6) + (liq_score * 0.4)
                         if lagging_diff_pct > 0.1:
@@ -173,7 +212,9 @@ async def broadcast_loop():
                             "cheapest_status": cheapest_status,
                             "dearest_exchange": dearest_exchange,
                             "dearest_status": dearest_status,
-                            "mean_reversion_growth": round(snap_growth_pct, 2)
+                            "mean_reversion_growth": round(snap_growth_pct, 2),
+                            "liquidity_pull_status": liquidity_pull_status,
+                            "stop_loss_pool_status": stop_loss_pool_status
                         }
 
                         dashboard_data.append({
@@ -185,78 +226,103 @@ async def broadcast_loop():
                         # Arbitrage check
                         opp = arb_detector.check_opportunity(pair, prices)
                         if opp:
-                            # Cooldown check logic (Redis-based)
+                            # Local MVP Alert Narrative (No DeepSeek/Telegram)
+                            short_liq = opp.get('cb_short_liq', 0)
+                            long_liq = opp.get('cb_long_liq', 0)
+                            liq_diff = short_liq - long_liq
+                            
+                            # Pull Global Metrics
+                            fng_data_str = redis_client.get("global:fng")
+                            fng_str = "N/A"
+                            if fng_data_str:
+                                fng = json.loads(fng_data_str)
+                                fng_str = f"{fng.get('value')} ({fng.get('class')})"
+                                
+                            base_sym = symbol.replace('USDT', '')
+                            cmc_vol_str = redis_client.get(f"global:cmc_vol:{base_sym}")
+                            cmc_vol = "N/A"
+                            if cmc_vol_str:
+                                cmc_data = json.loads(cmc_vol_str)
+                                cmc_vol = f"${cmc_data.get('volume_24h', 0):,.0f}"
+                            
+                            narrative = (
+                                f"🚨 LOCAL ALERT: {pair}\n"
+                                f"📈 Net Spread (Post-Fees): {opp['spread_pct']}%\n"
+                                f"🛒 Buy on {opp['buy_exchange']} at ${opp['buy_price']}\n"
+                                f"💰 Sell on {opp['sell_exchange']} at ${opp['sell_price']}\n"
+                                f"📊 Momentum: Buy Vol {round(opp.get('buy_vol', 0), 2)} | Sell Vol {round(opp.get('sell_vol', 0), 2)}\n"
+                                f"💧 Coinbase Liq Pool: Sell {round(short_liq, 2)} - Buy {round(long_liq, 2)} (Diff: +{round(liq_diff, 2)})\n"
+                                f"🌍 Global Metrics: F&G {fng_str} | CMC 24h Vol: {cmc_vol}"
+                            )
+                            opp["alert_message"] = narrative
+                            dashboard_data[-1]["opportunity"] = opp
+                            
+                            # Cooldown check logic for terminal print
                             cooldown_key = f"cooldown:{pair}"
                             if not redis_client.get(cooldown_key):
                                 logger.info(f"Arbitrage detected: {opp}")
-                                
-                                # Local MVP Alert Narrative (No DeepSeek/Telegram)
-                                short_liq = opp.get('cb_short_liq', 0)
-                                long_liq = opp.get('cb_long_liq', 0)
-                                liq_diff = short_liq - long_liq
-                                
-                                # Pull Global Metrics
-                                fng_data_str = redis_client.get("global:fng")
-                                fng_str = "N/A"
-                                if fng_data_str:
-                                    fng = json.loads(fng_data_str)
-                                    fng_str = f"{fng.get('value')} ({fng.get('class')})"
-                                    
-                                base_sym = symbol.replace('USDT', '')
-                                cmc_vol_str = redis_client.get(f"global:cmc_vol:{base_sym}")
-                                cmc_vol = "N/A"
-                                if cmc_vol_str:
-                                    cmc_data = json.loads(cmc_vol_str)
-                                    cmc_vol = f"${cmc_data.get('volume_24h', 0):,.0f}"
-                                
-                                narrative = (
-                                    f"🚨 LOCAL ALERT: {pair}\n"
-                                    f"📈 Net Spread (Post-Fees): {opp['spread_pct']}%\n"
-                                    f"🛒 Buy on {opp['buy_exchange']} at ${opp['buy_price']}\n"
-                                    f"💰 Sell on {opp['sell_exchange']} at ${opp['sell_price']}\n"
-                                    f"📊 Momentum: Buy Vol {round(opp.get('buy_vol', 0), 2)} | Sell Vol {round(opp.get('sell_vol', 0), 2)}\n"
-                                    f"💧 Coinbase Liq Pool: Sell {round(short_liq, 2)} - Buy {round(long_liq, 2)} (Diff: +{round(liq_diff, 2)})\n"
-                                    f"🌍 Global Metrics: F&G {fng_str} | CMC 24h Vol: {cmc_vol}"
-                                )
                                 print("\n" + "="*40)
                                 print(narrative)
                                 print("="*40 + "\n")
-                                
-                                redis_client.setex(cooldown_key, 300, "1") # 5 min cooldown
-                                opp["alert_message"] = narrative
-                                dashboard_data[-1]["opportunity"] = opp
+                                redis_client.setex(cooldown_key, 300, "1") # 5 min cooldown for terminal print
                         
-                        # Dynamic Exchange Taker Fee & Net Profit Calculation for Single-Venue Alpha Sniper
+                        # Dynamic Exchange Taker Fee & Net Profit Target Calculation
                         exchange_taker_fee_pct = settings.EXCHANGE_FEES.get(cheapest_exchange, 0.001) * 100
                         round_trip_fee_pct = exchange_taker_fee_pct * 2
-                        required_gross_discount = settings.MIN_NET_SPREAD + round_trip_fee_pct
+                        required_gross_discount = target_net_profit + round_trip_fee_pct
                         
-                        if not opp and recommendation in ["BUY", "STRONG BUY"] and lagging_diff_pct >= required_gross_discount and cheapest_status.startswith("Underpriced"):
-                            cooldown_key = f"cooldown_lag:{pair}"
-                            if not redis_client.get(cooldown_key):
+                        # Liquidity Pool Squeeze Exhaustion Filter: Do not execute long entry if short stop-losses/liquidation pools have already been tapped or if long liquidation overhang is severe
+                        liquidity_pool_exhausted = ("Cascade Dump Risk" in stop_loss_pool_status) or (short_liq > 0 and long_liq > short_liq * 1.3)
+                        
+                        abs_underpricing_pct = abs(cheapest_diff) if median_p > 0 and cheapest_diff < 0 else 0.0
+                        
+                        if not opp and recommendation in ["BUY", "STRONG BUY"] and abs_underpricing_pct >= required_gross_discount and not liquidity_pool_exhausted:
+                            position_key = f"agent:position:{pair}"
+                            active_position_str = redis_client.get(position_key)
+                            
+                            if active_position_str:
+                                # We already hold an open position! Check if mean reversion exit target is reached
+                                pos_data = json.loads(active_position_str)
+                                entry_p = pos_data["entry_price"]
+                                if min_p >= median_p or (min_p - entry_p) / entry_p >= (target_net_profit / 100):
+                                    profit_pct = ((min_p - entry_p) / entry_p) * 100
+                                    logger.info(f"🎯 AUTONOMOUS SNIPER EXIT: {pair} closed on {pos_data['venue']} at +{round(profit_pct, 2)}% net gain!")
+                                    redis_client.delete(position_key)
+                            else:
                                 narrative = (
                                     f"🚀 AUTONOMOUS SNIPER ALERT (Single-Venue Mean Reversion): {pair}\n"
                                     f"⚡ Execution Signal: {recommendation} ({round(confidence)}% Orderbook Confidence)\n"
                                     f"🎯 Target Entry Venue: {cheapest_exchange} at {cheapest_status} discount\n"
                                     f"📊 Fee Structure: {round(exchange_taker_fee_pct, 2)}% taker fee per trade ({round(round_trip_fee_pct, 2)}% round-trip drag)\n"
-                                    f"📈 Execution Gate: -{round(required_gross_discount, 2)}% minimum gross discount required to guarantee >= {settings.MIN_NET_SPREAD}% net bottom-line profit.\n"
-                                    f"💰 Status: Dislocation (-{round(lagging_diff_pct, 2)}%) successfully passed net profit gate! Immediate sniper entry triggered."
+                                    f"🛡️ Liquidation Squeeze Filter: PASSED ({stop_loss_pool_status}) - Upward short stop-loss magnet active!\n"
+                                    f"📈 Execution Gate: -{round(required_gross_discount, 2)}% minimum gross discount from global fair median required to guarantee >= {round(target_net_profit, 2)}% net bottom-line profit.\n"
+                                    f"💰 Status: Venue underpricing (-{round(abs_underpricing_pct, 2)}%) successfully passed net profit gate! Immediate sniper entry triggered."
                                 )
-                                logger.info(f"Lagging Execution Signal: {narrative}")
-                                print("\n" + "="*40)
-                                print(narrative)
-                                print("="*40 + "\n")
-                                
                                 tactical_opp = {
-                                    "spread_pct": round(lagging_diff_pct, 2),
-                                    "buy_exchange": lagging_exchange,
+                                    "spread_pct": round(abs_underpricing_pct, 2),
+                                    "buy_exchange": cheapest_exchange,
                                     "buy_price": min_p,
-                                    "sell_exchange": "Global Top",
-                                    "sell_price": max_p,
+                                    "sell_exchange": "Global Median",
+                                    "sell_price": median_p,
                                     "alert_message": narrative
                                 }
-                                redis_client.setex(cooldown_key, 60, "1") # 60 sec cooldown for lagging alerts
                                 dashboard_data[-1]["opportunity"] = tactical_opp
+                                
+                                # Lock inventory position in Redis to prevent duplicate buy orders
+                                redis_client.setex(position_key, 3600, json.dumps({
+                                    "status": "OPEN",
+                                    "entry_price": min_p,
+                                    "venue": cheapest_exchange,
+                                    "ts": datetime.now(timezone.utc).isoformat()
+                                }))
+                                
+                                cooldown_key = f"cooldown_lag:{pair}"
+                                if not redis_client.get(cooldown_key):
+                                    logger.info(f"Lagging Execution Signal: {narrative}")
+                                    print("\n" + "="*40)
+                                    print(narrative)
+                                    print("="*40 + "\n")
+                                    redis_client.setex(cooldown_key, 60, "1") # 60 sec cooldown for terminal print
                 
                 # Broadcast
                 fng_data_str = redis_client.get("global:fng")
@@ -299,7 +365,7 @@ async def broadcast_loop():
                         await conn.send_json({
                             "type": "update", 
                             "data": dashboard_data,
-                            "global": {"fng": fng, "macro": macro_data, "market_session": session_data}
+                            "global": {"fng": fng, "macro": macro_data, "market_session": session_data, "target_net_profit": target_net_profit}
                         })
                     
         except Exception as e:
