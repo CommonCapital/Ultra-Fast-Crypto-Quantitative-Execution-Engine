@@ -314,13 +314,18 @@ async def broadcast_loop():
                                 highest_p = pos_data.get("highest_price_seen", avg_entry_p)
                                 current_vol = pos_data.get("volume", 1.0)
                                 venue = pos_data["venue"]
+                                
+                                venue_data = valid_exchanges_map.get(venue, prices.get(venue, {}))
+                                current_venue_bid = venue_data.get('bid', venue_data.get('price', min_p))
+                                current_venue_ask = venue_data.get('ask', venue_data.get('price', min_p))
+                                
                                 pos_round_trip_fee_pct = (0.40 if venue == "Coinbase" else 0.10) * 2.0
-                                gross_profit_pct = ((min_p - avg_entry_p) / avg_entry_p) * 100
+                                gross_profit_pct = ((current_venue_bid - avg_entry_p) / avg_entry_p) * 100
                                 net_profit_pct = gross_profit_pct - pos_round_trip_fee_pct
                                 
                                 # Update highest price seen
-                                if min_p > highest_p:
-                                    highest_p = min_p
+                                if current_venue_bid > highest_p:
+                                    highest_p = current_venue_bid
                                     pos_data["highest_price_seen"] = highest_p
                                     redis_client.setex(position_key, 3600, json.dumps(pos_data))
                                 
@@ -330,20 +335,20 @@ async def broadcast_loop():
                                 # Did we EVER cross the hurdle?
                                 peak_hurdle_cleared = highest_net_profit_pct >= target_net_profit
                                 
-                                pullback_from_high_pct = ((highest_p - min_p) / highest_p) * 100 if highest_p > 0 else 0
+                                pullback_from_high_pct = ((highest_p - current_venue_bid) / highest_p) * 100 if highest_p > 0 else 0
                                 
                                 # Smart DCA Logic
                                 dca_triggered = False
-                                if min_p <= avg_entry_p * (1 - dca_drop_threshold_pct / 100.0) and confidence >= 65 and not toxic_flow_detected:
+                                if current_venue_bid <= avg_entry_p * (1 - dca_drop_threshold_pct / 100.0) and confidence >= 65 and not toxic_flow_detected:
                                     dca_triggered = True
-                                    # Execute DCA
+                                    # Execute DCA at current ask
                                     new_vol = current_vol * 2.0 # double down
-                                    new_avg_entry_p = ((avg_entry_p * current_vol) + (min_p * current_vol)) / new_vol
+                                    new_avg_entry_p = ((avg_entry_p * current_vol) + (current_venue_ask * current_vol)) / new_vol
                                     pos_data["avg_entry_price"] = new_avg_entry_p
                                     pos_data["volume"] = new_vol
-                                    pos_data["highest_price_seen"] = min_p # reset highest price
+                                    pos_data["highest_price_seen"] = current_venue_bid # reset highest price
                                     redis_client.setex(position_key, 3600, json.dumps(pos_data))
-                                    logger.info(f"🎯 SMART DCA EXECUTED: {pair} added on {venue} at ${min_p}. New Avg Entry: ${new_avg_entry_p}")
+                                    logger.info(f"🎯 SMART DCA EXECUTED: {pair} added on {venue} at ${current_venue_ask}. New Avg Entry: ${new_avg_entry_p}")
                                     avg_entry_p = new_avg_entry_p
                                     current_vol = new_vol
                                 
@@ -368,7 +373,7 @@ async def broadcast_loop():
                                     narrative = (
                                         f"🔒 ACTIVE INVENTORY: {pair} | Vol: {current_vol}x\n"
                                         f"⚡ Avg Entry: {venue} at ${round(avg_entry_p, 8)}\n"
-                                        f"📈 Peak Price Seen: ${round(highest_p, 8)} | Current: ${round(min_p, 8)}\n"
+                                        f"📈 Peak Price Seen: ${round(highest_p, 8)} | Current: ${round(current_venue_bid, 8)}\n"
                                         f"🎯 Trailing Hurdle: ${round(target_exit_p, 8)} (>= {target_net_profit}% Net)\n"
                                         f"📉 DCA Drop Threshold: {dca_drop_threshold_pct}%\n"
                                         f"💰 Current Net PnL: {'+' if net_profit_pct > 0 else ''}{round(net_profit_pct, 2)}%\n"
@@ -377,13 +382,16 @@ async def broadcast_loop():
                                     tactical_opp = {
                                         "spread_pct": round(abs_underpricing_pct, 2),
                                         "buy_exchange": venue,
-                                        "buy_price": min_p,
+                                        "buy_price": current_venue_bid,
                                         "sell_exchange": "Global Median",
                                         "sell_price": median_p,
                                         "alert_message": narrative
                                     }
                                     dashboard_data[-1]["opportunity"] = tactical_opp
                             else:
+                                cheapest_venue_data = valid_exchanges_map.get(cheapest_exchange, {})
+                                actual_buy_price = cheapest_venue_data.get('ask', min_p)
+                                
                                 narrative = (
                                     f"🚀 AUTONOMOUS SNIPER ALERT (Single-Venue Mean Reversion): {pair}\n"
                                     f"⚡ Execution Signal: {recommendation} ({round(confidence)}% Orderbook Confidence)\n"
@@ -397,7 +405,7 @@ async def broadcast_loop():
                                 tactical_opp = {
                                     "spread_pct": round(abs_underpricing_pct, 2),
                                     "buy_exchange": cheapest_exchange,
-                                    "buy_price": min_p,
+                                    "buy_price": actual_buy_price,
                                     "sell_exchange": "Global Median",
                                     "sell_price": median_p,
                                     "alert_message": narrative
@@ -414,9 +422,9 @@ async def broadcast_loop():
                                 # Lock inventory position in Redis to prevent duplicate buy orders
                                 redis_client.setex(position_key, 3600, json.dumps({
                                     "status": "OPEN",
-                                    "entry_price": min_p,
-                                    "avg_entry_price": min_p,
-                                    "highest_price_seen": min_p,
+                                    "entry_price": actual_buy_price,
+                                    "avg_entry_price": actual_buy_price,
+                                    "highest_price_seen": actual_buy_price,
                                     "venue": cheapest_exchange,
                                     "volume": base_multiplier,
                                     "multiplier": base_multiplier,
