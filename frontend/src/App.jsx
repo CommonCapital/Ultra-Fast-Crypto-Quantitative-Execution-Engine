@@ -9,12 +9,20 @@ function App() {
   const [alerts, setAlerts] = useState([]);
   const [activePair, setActivePair] = useState('BTC/USDT');
   const [targetProfit, setTargetProfit] = useState(0.5);
+  const [trailingPullback, setTrailingPullback] = useState(0.2);
+  const [dcaDrop, setDcaDrop] = useState(5.0);
 
   useEffect(() => {
     if (globalData?.target_net_profit !== undefined) {
       setTargetProfit(globalData.target_net_profit);
     }
-  }, [globalData?.target_net_profit]);
+    if (globalData?.trailing_pullback_pct !== undefined) {
+      setTrailingPullback(globalData.trailing_pullback_pct);
+    }
+    if (globalData?.dca_drop_threshold_pct !== undefined) {
+      setDcaDrop(globalData.dca_drop_threshold_pct);
+    }
+  }, [globalData?.target_net_profit, globalData?.trailing_pullback_pct, globalData?.dca_drop_threshold_pct]);
 
   const handleProfitChange = async (val) => {
     const num = parseFloat(val);
@@ -28,6 +36,38 @@ function App() {
         });
       } catch (err) {
         console.error("Error setting net profit target:", err);
+      }
+    }
+  };
+
+  const handleTrailingChange = async (val) => {
+    const num = parseFloat(val);
+    if (!isNaN(num)) {
+      setTrailingPullback(num);
+      try {
+        await fetch('http://localhost:8000/api/config/trailing-pullback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_pct: num })
+        });
+      } catch (err) {
+        console.error("Error setting trailing pullback:", err);
+      }
+    }
+  };
+
+  const handleDcaChange = async (val) => {
+    const num = parseFloat(val);
+    if (!isNaN(num)) {
+      setDcaDrop(num);
+      try {
+        await fetch('http://localhost:8000/api/config/dca-drop-threshold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_pct: num })
+        });
+      } catch (err) {
+        console.error("Error setting DCA drop:", err);
       }
     }
   };
@@ -76,22 +116,62 @@ function App() {
           </div>
         </div>
         
-        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '0.8rem 1.2rem', borderRadius: '8px', border: '1px solid var(--accent-primary)', display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: '300px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 'bold' }}>
-            <span>🎯 Target Net Profit:</span>
-            <span style={{ color: 'var(--accent-glow)' }}>{targetProfit}% Net</span>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', maxWidth: '800px' }}>
+          <div style={{ background: 'rgba(255,255,255,0.05)', padding: '0.8rem 1.2rem', borderRadius: '8px', border: '1px solid var(--accent-primary)', display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: '250px', flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 'bold' }}>
+              <span>🎯 Target Net Profit:</span>
+              <span style={{ color: 'var(--accent-glow)' }}>{targetProfit}% Net</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+              <input 
+                type="range" 
+                min="0.01" 
+                max="2.00" 
+                step="0.01" 
+                value={targetProfit} 
+                onChange={(e) => handleProfitChange(e.target.value)}
+                style={{ flex: 1, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+              />
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Dynamic Gross Gate: {(parseFloat(targetProfit) + 0.2).toFixed(2)}% (Std) | {(parseFloat(targetProfit) + 0.8).toFixed(2)}% (Coinbase)</div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
-            <input 
-              type="range" 
-              min="0.01" 
-              max="2.00" 
-              step="0.01" 
-              value={targetProfit} 
-              onChange={(e) => handleProfitChange(e.target.value)}
-              style={{ flex: 1, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-            />
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Dynamic Gross Gate: {(parseFloat(targetProfit) + 0.2).toFixed(2)}% (Standard 0.1% Fee Venues) | {(parseFloat(targetProfit) + 0.8).toFixed(2)}% (Coinbase 0.4% Venue)</span>
+
+          <div style={{ background: 'rgba(255,255,255,0.05)', padding: '0.8rem 1.2rem', borderRadius: '8px', border: '1px solid var(--success)', display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: '200px', flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 'bold' }}>
+              <span>🛡️ Trailing Stop:</span>
+              <span style={{ color: 'var(--success)' }}>{trailingPullback}% Drop</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+              <input 
+                type="range" 
+                min="0.01" 
+                max="5.00" 
+                step="0.01" 
+                value={trailingPullback} 
+                onChange={(e) => handleTrailingChange(e.target.value)}
+                style={{ flex: 1, accentColor: 'var(--success)', cursor: 'pointer' }}
+              />
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Exits strictly after peaking.</div>
+          </div>
+
+          <div style={{ background: 'rgba(255,255,255,0.05)', padding: '0.8rem 1.2rem', borderRadius: '8px', border: '1px solid var(--accent-glow)', display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: '200px', flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 'bold' }}>
+              <span>📉 Smart DCA Rescue:</span>
+              <span style={{ color: 'var(--accent-glow)' }}>{dcaDrop}% Drop</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+              <input 
+                type="range" 
+                min="0.5" 
+                max="20.0" 
+                step="0.5" 
+                value={dcaDrop} 
+                onChange={(e) => handleDcaChange(e.target.value)}
+                style={{ flex: 1, accentColor: 'var(--accent-glow)', cursor: 'pointer' }}
+              />
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Doubles down if strong momentum.</div>
           </div>
         </div>
       </header>

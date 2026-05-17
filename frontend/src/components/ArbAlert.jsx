@@ -12,6 +12,8 @@ export function ArbAlert({ opportunity }) {
       <div className="alert-message" style={{ 
         fontFamily: 'monospace', 
         whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        overflowWrap: 'break-word',
         backgroundColor: '#111',
         padding: '1rem',
         borderRadius: '8px',

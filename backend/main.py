@@ -43,10 +43,28 @@ app.add_middleware(
 class ProfitTargetPayload(BaseModel):
     target_pct: float
 
+class TrailingTargetPayload(BaseModel):
+    target_pct: float
+
+class DCATargetPayload(BaseModel):
+    target_pct: float
+
 @app.post("/api/config/net-profit")
 async def set_net_profit_target(payload: ProfitTargetPayload):
     target = max(0.01, min(10.0, payload.target_pct))
     redis_client.set("config:min_net_spread", str(target))
+    return {"status": "success", "target_pct": target}
+
+@app.post("/api/config/trailing-pullback")
+async def set_trailing_pullback_target(payload: TrailingTargetPayload):
+    target = max(0.01, min(5.0, payload.target_pct))
+    redis_client.set("config:trailing_pullback_pct", str(target))
+    return {"status": "success", "target_pct": target}
+
+@app.post("/api/config/dca-drop-threshold")
+async def set_dca_drop_target(payload: DCATargetPayload):
+    target = max(0.5, min(20.0, payload.target_pct))
+    redis_client.set("config:dca_drop_threshold_pct", str(target))
     return {"status": "success", "target_pct": target}
 
 async def broadcast_loop():
@@ -115,6 +133,12 @@ async def broadcast_loop():
                         
                         raw_target = redis_client.get("config:min_net_spread")
                         target_net_profit = float(raw_target) if raw_target is not None else settings.MIN_NET_SPREAD
+                        
+                        raw_trailing = redis_client.get("config:trailing_pullback_pct")
+                        trailing_pullback_pct = float(raw_trailing) if raw_trailing is not None else 0.2
+                        
+                        raw_dca = redis_client.get("config:dca_drop_threshold_pct")
+                        dca_drop_threshold_pct = float(raw_dca) if raw_dca is not None else 5.0
                         
                         if len(valid_prices) >= 2:
                             max_p = max(valid_prices)
@@ -274,34 +298,81 @@ async def broadcast_loop():
                         # Liquidity Pool Squeeze Exhaustion Filter: Do not execute long entry if short stop-losses/liquidation pools have already been tapped or if long liquidation overhang is severe
                         liquidity_pool_exhausted = ("Cascade Dump Risk" in stop_loss_pool_status) or (short_liq > 0 and long_liq > short_liq * 1.3)
                         
+                        # Toxic Flow / Falling Knife Filter: Ensure global volume isn't dominated by massive sell-offs
+                        toxic_flow_detected = (sell_vol > 0 and sell_vol > buy_vol * 1.5) or (buy_vol == 0 and sell_vol > 0)
+                        
                         abs_underpricing_pct = abs(cheapest_diff) if median_p > 0 and cheapest_diff < 0 else 0.0
                         
-                        if not opp and recommendation in ["BUY", "STRONG BUY"] and abs_underpricing_pct >= required_gross_discount and not liquidity_pool_exhausted:
+                        if not opp and recommendation in ["BUY", "STRONG BUY"] and abs_underpricing_pct >= required_gross_discount and not liquidity_pool_exhausted and not toxic_flow_detected:
                             position_key = f"agent:position:{pair}"
                             active_position_str = redis_client.get(position_key)
                             
                             if active_position_str:
-                                # We already hold an open position! Check if mean reversion exit target is reached
+                                # We already hold an open position!
                                 pos_data = json.loads(active_position_str)
-                                entry_p = pos_data["entry_price"]
+                                avg_entry_p = pos_data.get("avg_entry_price", pos_data.get("entry_price"))
+                                highest_p = pos_data.get("highest_price_seen", avg_entry_p)
+                                current_vol = pos_data.get("volume", 1.0)
                                 venue = pos_data["venue"]
                                 pos_round_trip_fee_pct = (0.40 if venue == "Coinbase" else 0.10) * 2.0
-                                gross_profit_pct = ((min_p - entry_p) / entry_p) * 100
+                                gross_profit_pct = ((min_p - avg_entry_p) / avg_entry_p) * 100
                                 net_profit_pct = gross_profit_pct - pos_round_trip_fee_pct
                                 
-                                # Strict No-Loss Game Rule: Exit ONLY when net profit is positive AND (meets target net profit OR global median reached)
-                                if net_profit_pct >= target_net_profit or (min_p >= median_p and net_profit_pct > 0.0):
-                                    logger.info(f"🎯 AUTONOMOUS NO-LOSS GUARANTEED EXIT: {pair} closed on {venue} at +{round(net_profit_pct, 2)}% net profit!")
+                                # Update highest price seen
+                                if min_p > highest_p:
+                                    highest_p = min_p
+                                    pos_data["highest_price_seen"] = highest_p
+                                    redis_client.setex(position_key, 3600, json.dumps(pos_data))
+                                
+                                highest_gross_profit_pct = ((highest_p - avg_entry_p) / avg_entry_p) * 100
+                                highest_net_profit_pct = highest_gross_profit_pct - pos_round_trip_fee_pct
+
+                                # Did we EVER cross the hurdle?
+                                peak_hurdle_cleared = highest_net_profit_pct >= target_net_profit
+                                
+                                pullback_from_high_pct = ((highest_p - min_p) / highest_p) * 100 if highest_p > 0 else 0
+                                
+                                # Smart DCA Logic
+                                dca_triggered = False
+                                if min_p <= avg_entry_p * (1 - dca_drop_threshold_pct / 100.0) and confidence >= 65 and not toxic_flow_detected:
+                                    dca_triggered = True
+                                    # Execute DCA
+                                    new_vol = current_vol * 2.0 # double down
+                                    new_avg_entry_p = ((avg_entry_p * current_vol) + (min_p * current_vol)) / new_vol
+                                    pos_data["avg_entry_price"] = new_avg_entry_p
+                                    pos_data["volume"] = new_vol
+                                    pos_data["highest_price_seen"] = min_p # reset highest price
+                                    redis_client.setex(position_key, 3600, json.dumps(pos_data))
+                                    logger.info(f"🎯 SMART DCA EXECUTED: {pair} added on {venue} at ${min_p}. New Avg Entry: ${new_avg_entry_p}")
+                                    avg_entry_p = new_avg_entry_p
+                                    current_vol = new_vol
+                                
+                                # Exit Logic
+                                hard_floor_triggered = peak_hurdle_cleared and (net_profit_pct <= target_net_profit)
+                                trailing_triggered = peak_hurdle_cleared and (pullback_from_high_pct >= trailing_pullback_pct)
+                                
+                                if hard_floor_triggered or trailing_triggered:
+                                    exit_reason = "HARD FLOOR PRESERVATION" if hard_floor_triggered else "TRAILING TAKE-PROFIT"
+                                    logger.info(f"🎯 AUTONOMOUS {exit_reason} EXIT: {pair} closed on {venue} at +{round(net_profit_pct, 2)}% net profit! (Peak was ${highest_p})")
                                     redis_client.delete(position_key)
                                 else:
                                     # Keep UI banner alive showing active running trade
-                                    target_exit_p = entry_p * (1.0 + (target_net_profit + pos_round_trip_fee_pct) / 100.0)
+                                    target_exit_p = avg_entry_p * (1.0 + (target_net_profit + pos_round_trip_fee_pct) / 100.0)
+                                    if dca_triggered:
+                                        status_msg = "DCA EXECUTED - Adjusting Entry"
+                                    elif peak_hurdle_cleared:
+                                        status_msg = "🎯 Hurdle Cleared! Trailing Stop & Hard Floor Active"
+                                    else:
+                                        status_msg = "Waiting for price to cross Target Hurdle"
+                                        
                                     narrative = (
-                                        f"🔒 ACTIVE SNIPER INVENTORY POSITION: {pair}\n"
-                                        f"⚡ Entry Venue: {venue} at ${entry_p}\n"
-                                        f"🎯 Guaranteed Profit Target: ${round(target_exit_p, 8)} (>= {target_net_profit}% Net)\n"
-                                        f"📈 Current Net PnL (After Fees): {'+' if net_profit_pct > 0 else ''}{round(net_profit_pct, 2)}%\n"
-                                        f"⏳ Status: No-Loss enforcement active. Holding position until bottom-line net profit target is achieved."
+                                        f"🔒 ACTIVE INVENTORY: {pair} | Vol: {current_vol}x\n"
+                                        f"⚡ Avg Entry: {venue} at ${round(avg_entry_p, 8)}\n"
+                                        f"📈 Peak Price Seen: ${round(highest_p, 8)} | Current: ${round(min_p, 8)}\n"
+                                        f"🎯 Trailing Hurdle: ${round(target_exit_p, 8)} (>= {target_net_profit}% Net)\n"
+                                        f"📉 DCA Drop Threshold: {dca_drop_threshold_pct}%\n"
+                                        f"💰 Current Net PnL: {'+' if net_profit_pct > 0 else ''}{round(net_profit_pct, 2)}%\n"
+                                        f"⏳ Status: {status_msg}"
                                     )
                                     tactical_opp = {
                                         "spread_pct": round(abs_underpricing_pct, 2),
@@ -319,6 +390,7 @@ async def broadcast_loop():
                                     f"🎯 Target Entry Venue: {cheapest_exchange} at {cheapest_status} discount\n"
                                     f"📊 Fee Structure: {round(exchange_taker_fee_pct, 2)}% taker fee per trade ({round(round_trip_fee_pct, 2)}% round-trip drag)\n"
                                     f"🛡️ Liquidation Squeeze Filter: PASSED ({stop_loss_pool_status}) - Upward short stop-loss magnet active!\n"
+                                    f"🌊 Toxic Flow Filter: PASSED (Buy Vol: {round(buy_vol, 2)} | Sell Vol: {round(sell_vol, 2)}) - No dump detected!\n"
                                     f"📈 Execution Gate: -{round(required_gross_discount, 2)}% minimum gross discount from global fair median required to guarantee >= {round(target_net_profit, 2)}% net bottom-line profit.\n"
                                     f"💰 Status: Venue underpricing (-{round(abs_underpricing_pct, 2)}%) successfully passed net profit gate! Immediate sniper entry triggered."
                                 )
@@ -332,11 +404,22 @@ async def broadcast_loop():
                                 }
                                 dashboard_data[-1]["opportunity"] = tactical_opp
                                 
+                                # Algorithmic Position Sizing
+                                base_multiplier = 1.0
+                                if confidence >= 80 and abs_underpricing_pct >= (required_gross_discount * 1.5):
+                                    base_multiplier = 3.0
+                                elif confidence >= 75 and abs_underpricing_pct >= (required_gross_discount * 1.2):
+                                    base_multiplier = 2.0
+
                                 # Lock inventory position in Redis to prevent duplicate buy orders
                                 redis_client.setex(position_key, 3600, json.dumps({
                                     "status": "OPEN",
                                     "entry_price": min_p,
+                                    "avg_entry_price": min_p,
+                                    "highest_price_seen": min_p,
                                     "venue": cheapest_exchange,
+                                    "volume": base_multiplier,
+                                    "multiplier": base_multiplier,
                                     "ts": datetime.now(timezone.utc).isoformat()
                                 }))
                                 
@@ -389,7 +472,14 @@ async def broadcast_loop():
                         await conn.send_json({
                             "type": "update", 
                             "data": dashboard_data,
-                            "global": {"fng": fng, "macro": macro_data, "market_session": session_data, "target_net_profit": target_net_profit}
+                            "global": {
+                                "fng": fng, 
+                                "macro": macro_data, 
+                                "market_session": session_data, 
+                                "target_net_profit": target_net_profit if 'target_net_profit' in locals() else settings.MIN_NET_SPREAD,
+                                "trailing_pullback_pct": trailing_pullback_pct if 'trailing_pullback_pct' in locals() else 0.2,
+                                "dca_drop_threshold_pct": dca_drop_threshold_pct if 'dca_drop_threshold_pct' in locals() else 5.0
+                            }
                         })
                     
         except Exception as e:

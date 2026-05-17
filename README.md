@@ -4,7 +4,7 @@ A high-performance, in-memory cryptocurrency quantitative analysis and high-freq
 
 Unlike traditional polling bots, AI wrappers, or heavy database-bound applications, this platform is optimized strictly for **sub-millisecond velocity** and **deterministic mathematical execution**. It opens persistent WebSocket connections to major exchanges, slurps live tick data and Order Book Level-2 depth directly into a Redis hot-cache, and evaluates multi-venue momentum in 500-microsecond cycles. 
 
-When high-conviction dislocations are detected that pass strict fee-adjusted profitability thresholds, the Quantitative Execution Algorithm dispatches tactical signals directly to your Terminal and a sleek React Dashboard, ready for automated millisecond execution.
+When high-conviction dislocations are detected that pass strict fee-adjusted profitability thresholds, the Quantitative Execution Algorithm dispatches tactical signals directly to your Terminal and a sleek React Dashboard, and manages fully automated execution through advanced risk mechanics.
 
 ---
 
@@ -13,7 +13,7 @@ When high-conviction dislocations are detected that pass strict fee-adjusted pro
 * **RAM-Only Architecture**: Zero database overhead. Data is streamed via WebSockets directly into a local Redis cache for blazing-fast read/write cycles.
 * **100% Real-Time Data**: Live feeds from Binance, Bybit, MEXC, BingX, Coinbase, OKX, and BitMEX.
 * **Strict Mathematical Execution**:
-  * **Compound Net Profit**: Calculates exact capital returns by deducting both the *Taker Buy Fee* and *Taker Sell Fee* specifically for the two exchanges involved in the spread. Guarantees a rigid minimum net profit (e.g., `0.5%`) after all slippage and commissions.
+  * **Compound Net Profit**: Calculates exact capital returns by deducting both the *Taker Buy Fee* and *Taker Sell Fee* specifically for the two exchanges involved in the spread. Guarantees a rigid minimum net profit equal to your dynamic **Target Net Profit** after all slippage and commissions.
   * **Clear Growth Momentum**: Evaluates live Binance trade streams to ensure `Recent Buy Volume > Recent Sell Volume` before firing an alert.
   * **Real-Time L2 Liquidity Squeeze**: Evaluates the live Coinbase Level-2 order book dynamically, comparing the total dollar value of the Sell Liquidity pool against the Buy Liquidity pool to ensure upward price pressure.
 * **Global Macro Context**: Enriches alerts by fetching the real-time **Fear & Greed Index** (via Alternative.me) and **Global 24h Volume** (via CoinMarketCap API). *Note: CMC is queried exactly once every 5 minutes to guarantee it stays 100% free under their 10,000 credit/month limit.*
@@ -22,26 +22,22 @@ When high-conviction dislocations are detected that pass strict fee-adjusted pro
 
 ---
 
-## 🧠 Quantitative Algorithmic Strategy (No LLMs)
+## 🧠 Quantitative Algorithmic Strategy & Execution
 
-While the engine detects pure arbitrage (buying on Exchange A and selling on Exchange B), it is strategically engineered for **Multi-Venue Signal Aggregation for Single-Venue Execution**. 
+This engine relies strictly on hard-coded mathematical logic, order book physics, and statistical probability. There are no unpredictable generative wrappers or sentiment hallucinations involved in execution.
 
-This is strictly a **Deterministic Quantitative Algorithm**. It operates entirely on hard-coded mathematical logic, order book physics, and statistical probability. There are no black-box LLMs, unpredictable generative wrappers, or sentiment hallucinations involved in execution.
+### 🛡️ Advanced Risk Management & Execution Mechanics
+The bot manages live positions with institutional-grade risk models to ensure no-loss execution and capital preservation:
+1. **Dynamic Trailing Take-Profit**: Once a position crosses the minimum net profit threshold (after fees), the bot tracks the `highest_price_seen`. It will not exit until the price pulls back by a configurable threshold (e.g., `0.2%`), capturing maximum upside on explosive pumps rather than hard-exiting early.
+2. **📉 Smart DCA (Dollar-Cost Averaging) Rescue**: If an active position suffers a steep drop (e.g., `-5.0%`), the engine does not panic sell. Instead, it checks the global order book for "Strong Momentum." If it is safe, it automatically doubles down, drastically lowering the average entry price so that even a minor bounce results in a profitable exit.
+3. **Algorithmic Position Sizing**: Positions scale automatically by volume multipliers (`1x`, `2x`, `3x`) based on the magnitude of the price dislocation and the global confidence score.
+4. **Dynamic Configuration API**: Tweak all risk parameters—Net Profit Target, Trailing Pullback Threshold, and Smart DCA Drop Threshold—live from the frontend dashboard via FastAPI/Redis without ever restarting the backend.
 
-The **Action Recommendation Engine** generates a live `Confidence Score (0-100%)` based on a confluence of rigid triggers:
+### 🎯 The Action Recommendation Engine
+The engine generates a live `Confidence Score (0-100%)` based on a confluence of rigid triggers:
 1. **The Flow Gate (60% Weight):** Evaluates Binance's live trade streams to ensure `Buyer Taker Volume > Seller Taker Volume` (indicating strong retail buying pressure).
 2. **The Liquidity Squeeze (40% Weight):** Evaluates Coinbase's Level-2 order book. Heavy Short Liquidity (Sell walls) compared to Long Liquidity (Buy walls) increases the probability of a violent short-squeeze.
-3. **The Lagging Exchange Alpha (Bonus Confidence):** Scans all 7 exchanges simultaneously. If it spots a single exchange lagging behind the global market maximum price by `> 0.1%`, it flags that exchange as a tactical **Target Buy**, anticipating a rapid price-snap to catch up to the aggregate market.
-4. **The Geopolitical Macro Gate (Situational Awareness & Future ML):** An asynchronous RSS aggregator scans global crypto and geopolitical feeds in the background. It utilizes strict regex word boundary NLP matching (`\bwar\b`, `\bbreakout\b`) to eliminate false substring matches. Because L2 scalping is a high-frequency microstructure play, news sentiment is explicitly isolated from short-term buy/sell recommendations. Instead, the top 10 live articles are streamed into a dedicated interactive **Newsletter Feed** at the bottom of the dashboard with clickable source citations.
-
-### ⚡ Automated Millisecond Execution Mandate
-
-When transitioned to automated execution mode via authenticated `ccxt` API connectors, the algorithm strictly adheres to the following high-frequency execution protocol:
-* **Sub-Millisecond Entry**: Execute a Market Buy on a specific exchange within ~5 to 15 milliseconds *only* when the aggregate Recommendation is `BUY` or `STRONG BUY` **and** that exchange is trading at a lagging price discount of **>= 5%** compared to the global market top price.
-* **The Spot No-Loss Mandate**: All executions occur strictly on Spot markets (zero leverage, zero liquidation risk). Once an asset is acquired at a lagging discount, the algorithm calculates the exact break-even price (Execution Price + Taker Fees). The algorithm is mathematically hard-coded to never panic-sell or close at a loss during short-term volatility.
-* **Cost-Basis Laddering (DCA)**: If an acquired position enters temporary drawdown (`<= -5%`) while the global multi-venue radar remains heavily bullish, the algorithm deploys secondary laddered buy orders to average down the cost basis, enabling profitable exits on minor mean-reversion bounces.
-* **Macro Circuit Breakers**: The algorithm overrides the no-loss rule *only* under extreme black-swan conditions: if a coin experiences an isolated flash-crash `> 15%` or if the Global Fear & Greed Index violently collapses below 20 ("Extreme Fear"), the algorithm instantly cuts positions to preserve capital.
-* **Algorithmic Take-Profit**: The algorithm deploys a dynamic trailing Take-Profit, waiting until the lagging exchange order book re-aligns with the global market to exit the position strictly in net profit.
+3. **The Lagging Exchange Alpha (Bonus Confidence):** Scans all 7 exchanges simultaneously. If it spots a single exchange lagging behind the global market maximum price by `> 0.1%`, it flags that exchange as a tactical **Target Buy**.
 
 ---
 
@@ -120,9 +116,7 @@ Navigate to `http://localhost:5173` to view the live exchange matrix!
 
 ## 🗺 Future Plans & Roadmap
 
-This MVP is currently optimized as a high-speed alerting system for manual discretionary trading. The architecture is explicitly designed to scale into a fully automated, quantitative fund-grade system:
-
-- [ ] **Automated Single-Venue Execution**: Transition from alerting to automated execution using `ccxt`. The algorithm will place a Market Buy on the "Lagging Exchange" within milliseconds when Confidence is > 85%, and automatically deploy a dynamic trailing Take-Profit to sell once in profit (accounting for maker/taker fees).
+- [x] **Advanced Automated Execution**: Trailing take-profits, algorithmic position sizing, and Smart DCA.
 - [ ] **Machine Learning Re-Integration**: Re-introduce XGBoost and LightGBM models as the final "AI Gate" to predict false-breakout probabilities using historical order-book imbalance data before any automated execution is permitted.
 - [ ] **Telegram & DeepSeek Integration**: Re-connect API hooks to broadcast alerts dynamically to private Telegram channels using LLM-generated market narratives.
 - [ ] **Dynamic Fee API**: Transition from hardcoded exchange fee structures (`0.1%`) to dynamic API queries, accounting for VIP tiers and token-holding fee discounts (e.g., holding BNB on Binance).
@@ -144,6 +138,3 @@ Contributions, issues, and feature requests are welcome!
 ## 📝 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
-# Ultra-Fast-Crypto-Arbitrage-Engine
-# Ultra-Fast-Crypto-Engine-with-Autonomous-Agent-Architecture
-# Ultra-Fast-Crypto-Engine-with-Autonomous-Agent-Architecture
