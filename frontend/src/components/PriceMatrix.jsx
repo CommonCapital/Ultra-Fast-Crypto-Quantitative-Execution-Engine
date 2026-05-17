@@ -45,6 +45,14 @@ export function PriceMatrix({ prices }) {
     spreadPct = ((maxPrice - minPrice) / minPrice) * 100;
   }
 
+  const formatPrice = (p) => {
+    if (p === undefined || p === null || isNaN(p)) return '---';
+    if (p === 0) return '0.0000';
+    if (p < 0.001) return p.toFixed(8);
+    if (p < 1) return p.toFixed(6);
+    return p.toFixed(4);
+  };
+
   return (
     <div className="price-matrix-container" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <div className="price-matrix">
@@ -85,10 +93,10 @@ export function PriceMatrix({ prices }) {
                 
                 <div className="exchange-name">{exchange}</div>
                 <div className="exchange-price" style={{ color: color, transition: 'color 0.3s' }}>
-                  ${currentPrice?.toFixed(4) || '---'} {arrow}
+                  ${formatPrice(currentPrice)} {arrow}
                 </div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                  B: {data.bid?.toFixed(4)} | A: {data.ask?.toFixed(4)}
+                  B: {formatPrice(data.bid)} | A: {formatPrice(data.ask)}
                 </div>
               </div>
             );

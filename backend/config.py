@@ -59,7 +59,12 @@ class Settings:
         "BitMEX": 0.001
     }
     
-    # Pairs to track
-    PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT", "AVAX/USDT"]
+    # Pairs to track (24 High-Volume Assets across L1s, Memes, AI, DeFi, and Majors)
+    PAIRS = [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT", 
+        "LINK/USDT", "AVAX/USDT", "SHIB/USDT", "PEPE/USDT", "NEAR/USDT", "SUI/USDT", 
+        "APT/USDT", "FET/USDT", "RENDER/USDT", "WLD/USDT", "INJ/USDT", "TIA/USDT", 
+        "FTM/USDT", "DOT/USDT", "MATIC/USDT", "LTC/USDT", "BCH/USDT", "ATOM/USDT"
+    ]
 
 settings = Settings()

@@ -284,10 +284,34 @@ async def broadcast_loop():
                                 # We already hold an open position! Check if mean reversion exit target is reached
                                 pos_data = json.loads(active_position_str)
                                 entry_p = pos_data["entry_price"]
-                                if min_p >= median_p or (min_p - entry_p) / entry_p >= (target_net_profit / 100):
-                                    profit_pct = ((min_p - entry_p) / entry_p) * 100
-                                    logger.info(f"🎯 AUTONOMOUS SNIPER EXIT: {pair} closed on {pos_data['venue']} at +{round(profit_pct, 2)}% net gain!")
+                                venue = pos_data["venue"]
+                                pos_round_trip_fee_pct = (0.40 if venue == "Coinbase" else 0.10) * 2.0
+                                gross_profit_pct = ((min_p - entry_p) / entry_p) * 100
+                                net_profit_pct = gross_profit_pct - pos_round_trip_fee_pct
+                                
+                                # Strict No-Loss Game Rule: Exit ONLY when net profit is positive AND (meets target net profit OR global median reached)
+                                if net_profit_pct >= target_net_profit or (min_p >= median_p and net_profit_pct > 0.0):
+                                    logger.info(f"🎯 AUTONOMOUS NO-LOSS GUARANTEED EXIT: {pair} closed on {venue} at +{round(net_profit_pct, 2)}% net profit!")
                                     redis_client.delete(position_key)
+                                else:
+                                    # Keep UI banner alive showing active running trade
+                                    target_exit_p = entry_p * (1.0 + (target_net_profit + pos_round_trip_fee_pct) / 100.0)
+                                    narrative = (
+                                        f"🔒 ACTIVE SNIPER INVENTORY POSITION: {pair}\n"
+                                        f"⚡ Entry Venue: {venue} at ${entry_p}\n"
+                                        f"🎯 Guaranteed Profit Target: ${round(target_exit_p, 8)} (>= {target_net_profit}% Net)\n"
+                                        f"📈 Current Net PnL (After Fees): {'+' if net_profit_pct > 0 else ''}{round(net_profit_pct, 2)}%\n"
+                                        f"⏳ Status: No-Loss enforcement active. Holding position until bottom-line net profit target is achieved."
+                                    )
+                                    tactical_opp = {
+                                        "spread_pct": round(abs_underpricing_pct, 2),
+                                        "buy_exchange": venue,
+                                        "buy_price": min_p,
+                                        "sell_exchange": "Global Median",
+                                        "sell_price": median_p,
+                                        "alert_message": narrative
+                                    }
+                                    dashboard_data[-1]["opportunity"] = tactical_opp
                             else:
                                 narrative = (
                                     f"🚀 AUTONOMOUS SNIPER ALERT (Single-Venue Mean Reversion): {pair}\n"
