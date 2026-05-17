@@ -10,7 +10,7 @@ export function AlertLog({ alerts }) {
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
             {alert.time} | {alert.pair}
           </div>
-          <div className="alert-message">{alert.message}</div>
+          <div className="alert-message" style={{ whiteSpace: 'pre-line', fontSize: '0.85rem', lineHeight: '1.4', marginTop: '0.4rem' }}>{alert.message}</div>
         </div>
       ))}
     </div>

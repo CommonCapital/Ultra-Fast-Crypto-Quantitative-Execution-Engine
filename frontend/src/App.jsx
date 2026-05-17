@@ -39,25 +39,25 @@ function App() {
   useEffect(() => {
     if (data && data.length > 0) {
       data.forEach(pairData => {
-        if (pairData?.opportunity?.alert_message) {
-          setAlerts(prev => {
-            const now = Date.now();
-            const newAlert = {
-              time: new Date().toLocaleTimeString(),
-              pair: pairData.pair,
-              message: pairData.opportunity.alert_message,
-              timestamp: now
-            };
-            // Avoid flooding: check if we already recorded an alert for this pair within the last 60 seconds
-            if (prev.length > 0) {
-              const lastForPair = prev.find(a => a.pair === newAlert.pair);
-              if (lastForPair && (now - lastForPair.timestamp < 60000)) {
-                return prev;
+          if (pairData?.opportunity?.alert_message && !pairData.opportunity.alert_message.includes("ACTIVE SNIPER INVENTORY POSITION")) {
+            setAlerts(prev => {
+              const now = Date.now();
+              const newAlert = {
+                time: new Date().toLocaleTimeString(),
+                pair: pairData.pair,
+                message: pairData.opportunity.alert_message,
+                timestamp: now
+              };
+              // Avoid flooding: check if we already recorded an alert for this pair within the last 60 seconds
+              if (prev.length > 0) {
+                const lastForPair = prev.find(a => a.pair === newAlert.pair && a.message === newAlert.message);
+                if (lastForPair && (now - lastForPair.timestamp < 60000)) {
+                  return prev;
+                }
               }
-            }
-            return [newAlert, ...prev].slice(0, 50); // keep last 50
-          });
-        }
+              return [newAlert, ...prev].slice(0, 50); // keep last 50
+            });
+          }
       });
     }
   }, [data]);
