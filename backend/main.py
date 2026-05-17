@@ -114,12 +114,12 @@ async def broadcast_loop():
                                 cheapest_diff = ((min_p - median_p) / median_p) * 100
                                 dearest_diff = ((max_p - median_p) / median_p) * 100
                                 
-                                if cheapest_diff <= -0.5:
+                                if cheapest_diff <= -0.7:
                                     cheapest_status = f"Underpriced (-{abs(round(cheapest_diff, 2))}%)"
                                 else:
                                     cheapest_status = "Fair Value"
                                     
-                                if dearest_diff >= 0.5:
+                                if dearest_diff >= 0.7:
                                     dearest_status = f"Overpriced (+{round(dearest_diff, 2)}%)"
                                 else:
                                     dearest_status = "Fair Value"
@@ -226,16 +226,21 @@ async def broadcast_loop():
                                 opp["alert_message"] = narrative
                                 dashboard_data[-1]["opportunity"] = opp
                         
-                        # Tactical 0.5% Underpriced Execution Alert Check (Agent Action)
-                        if not opp and recommendation in ["BUY", "STRONG BUY"] and lagging_diff_pct >= 0.5 and cheapest_status.startswith("Underpriced"):
+                        # Dynamic Exchange Taker Fee & Net Profit Calculation for Single-Venue Alpha Sniper
+                        exchange_taker_fee_pct = settings.EXCHANGE_FEES.get(cheapest_exchange, 0.001) * 100
+                        round_trip_fee_pct = exchange_taker_fee_pct * 2
+                        required_gross_discount = settings.MIN_NET_SPREAD + round_trip_fee_pct
+                        
+                        if not opp and recommendation in ["BUY", "STRONG BUY"] and lagging_diff_pct >= required_gross_discount and cheapest_status.startswith("Underpriced"):
                             cooldown_key = f"cooldown_lag:{pair}"
                             if not redis_client.get(cooldown_key):
                                 narrative = (
-                                    f"🚀 AGENT EXECUTION ALERT (0.5% Underpriced Gate): {pair}\n"
-                                    f"⚡ Signal: {recommendation} ({round(confidence)}% Confidence)\n"
-                                    f"🎯 Target Buy: {lagging_exchange} (Lagging discount: -{round(lagging_diff_pct, 2)}%)\n"
-                                    f"📊 Valuation Baseline: {cheapest_status}\n"
-                                    f"⏱ Immediate automated entry recommended within ~10ms window."
+                                    f"🚀 AUTONOMOUS SNIPER ALERT (Single-Venue Mean Reversion): {pair}\n"
+                                    f"⚡ Execution Signal: {recommendation} ({round(confidence)}% Orderbook Confidence)\n"
+                                    f"🎯 Target Entry Venue: {cheapest_exchange} at {cheapest_status} discount\n"
+                                    f"📊 Fee Structure: {round(exchange_taker_fee_pct, 2)}% taker fee per trade ({round(round_trip_fee_pct, 2)}% round-trip drag)\n"
+                                    f"📈 Execution Gate: -{round(required_gross_discount, 2)}% minimum gross discount required to guarantee >= {settings.MIN_NET_SPREAD}% net bottom-line profit.\n"
+                                    f"💰 Status: Dislocation (-{round(lagging_diff_pct, 2)}%) successfully passed net profit gate! Immediate sniper entry triggered."
                                 )
                                 logger.info(f"Lagging Execution Signal: {narrative}")
                                 print("\n" + "="*40)
