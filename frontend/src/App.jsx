@@ -78,6 +78,21 @@ function App() {
         <section className="panel">
           <h2>Market Signals & Liquidity — {primaryPairData?.pair || 'Loading...'}</h2>
           <div className="signals-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
+            <div className="signal-item" style={{ border: '1px solid var(--accent-primary)', background: 'rgba(59, 130, 246, 0.05)' }}>
+              <div className="signal-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>🌍 Active Global Session</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: 'bold' }}>
+                  🕒 {globalData?.market_session?.utc_time || 'UTC'}
+                </span>
+              </div>
+              <div className="signal-value" style={{ fontSize: '1.05rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem', fontWeight: 'bold', color: 'var(--text-main)' }}>
+                <div>{globalData?.market_session?.name || 'Loading Session...'}</div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 'normal', color: 'var(--text-muted)' }}>
+                  Regime: {globalData?.market_session?.status || 'Calculating liquidity regime...'}
+                </div>
+              </div>
+            </div>
+
             <div className="signal-item">
               <div className="signal-label">Fear & Greed Index</div>
               <div className="signal-value" style={{ fontSize: '1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
@@ -177,6 +192,35 @@ function App() {
                     {globalData.macro.keyword_hits.map((hit, idx) => (
                       <span key={idx} style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>{hit}</span>
                     ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="signal-item" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
+              <div className="signal-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Valuation Radar & Gross Spread</span>
+                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--accent-primary)', background: 'rgba(59, 130, 246, 0.1)', padding: '2px 6px', borderRadius: '4px' }}>
+                  {primaryPairData?.signals?.gross_spread_pct || '0.00'}% Spread
+                </span>
+              </div>
+              <div className="signal-value" style={{ fontSize: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.6rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.3rem' }}>
+                  <span style={{ color: 'var(--success)' }}>🛒 Cheapest ({primaryPairData?.signals?.cheapest_exchange || 'N/A'}):</span>
+                  <span style={{ fontWeight: '500', color: primaryPairData?.signals?.cheapest_status?.includes('Underpriced') ? 'var(--success)' : 'var(--text-muted)' }}>
+                    {primaryPairData?.signals?.cheapest_status || 'Fair Value'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: 'var(--danger)' }}>💰 Dearest ({primaryPairData?.signals?.dearest_exchange || 'N/A'}):</span>
+                  <span style={{ fontWeight: '500', color: primaryPairData?.signals?.dearest_status?.includes('Overpriced') ? 'var(--danger)' : 'var(--text-muted)' }}>
+                    {primaryPairData?.signals?.dearest_status || 'Fair Value'}
+                  </span>
+                </div>
+                {primaryPairData?.signals?.mean_reversion_growth > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--success)', marginTop: '0.2rem', fontSize: '0.75rem', fontWeight: 'bold', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.4rem' }}>
+                    <span>📈 Underpriced Reversion Snap:</span>
+                    <span>+{primaryPairData.signals.mean_reversion_growth}% Snap Up</span>
                   </div>
                 )}
               </div>

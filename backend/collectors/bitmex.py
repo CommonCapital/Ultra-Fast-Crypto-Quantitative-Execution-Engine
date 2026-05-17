@@ -54,15 +54,18 @@ async def start_bitmex_collector(redis_client, pairs):
                                     if state[clean_sym]["price"] == 0.0 and state[clean_sym]["ask"]:
                                         state[clean_sym]["price"] = state[clean_sym]["ask"]
                                         
-                                    if state[clean_sym]["price"] > 0:
+                                    has_quotes = state[clean_sym]["bid"] and state[clean_sym]["ask"]
+                                    active_price = (state[clean_sym]["bid"] + state[clean_sym]["ask"]) / 2 if has_quotes else state[clean_sym]["price"]
+                                        
+                                    if active_price > 0:
                                         tick = {
                                             "ts": state[clean_sym]["ts"],
                                             "exchange": "BitMEX",
                                             "pair": clean_sym,
-                                            "price": state[clean_sym]["price"],
+                                            "price": round(active_price, 4),
                                             "volume": state[clean_sym]["volume"],
-                                            "bid": state[clean_sym]["bid"] if state[clean_sym]["bid"] else state[clean_sym]["price"],
-                                            "ask": state[clean_sym]["ask"] if state[clean_sym]["ask"] else state[clean_sym]["price"]
+                                            "bid": state[clean_sym]["bid"] if state[clean_sym]["bid"] else active_price,
+                                            "ask": state[clean_sym]["ask"] if state[clean_sym]["ask"] else active_price
                                         }
                                         redis_client.set(f"tick:BitMEX:{clean_sym}", json.dumps(tick))
                     except (json.JSONDecodeError, KeyError, ValueError):

@@ -52,14 +52,18 @@ async def start_coinbase_collector(redis_client, pairs):
                                 long_liq = sum(p * q for p, q in orderbooks[symbol]['bids'].items())
                                 short_liq = sum(p * q for p, q in orderbooks[symbol]['asks'].items())
                                 
+                                top_bid = max(orderbooks[symbol]['bids'].keys(), default=0)
+                                top_ask = min(orderbooks[symbol]['asks'].keys(), default=0)
+                                mid_price = (top_bid + top_ask) / 2 if (top_bid > 0 and top_ask > 0) else float(updates[0]['price_level'])
+                                
                                 tick = {
                                     "ts": datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
                                     "exchange": "Coinbase",
                                     "pair": symbol,
-                                    "price": float(updates[0]['price_level']),
+                                    "price": mid_price,
                                     "volume": 0,
-                                    "bid": max(orderbooks[symbol]['bids'].keys(), default=0),
-                                    "ask": min(orderbooks[symbol]['asks'].keys(), default=0),
+                                    "bid": top_bid,
+                                    "ask": top_ask,
                                     "long_liq": long_liq,
                                     "short_liq": short_liq
                                 }

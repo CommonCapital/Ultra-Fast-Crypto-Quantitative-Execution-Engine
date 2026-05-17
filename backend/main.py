@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import redis
@@ -40,9 +41,11 @@ app.add_middleware(
 
 async def broadcast_loop():
     """Background task to broadcast state to WS clients and detect arbitrage."""
+    cycle_counter = 0
     while True:
+        cycle_counter += 1
         try:
-            if active_connections:
+            if True: # HFT engine runs continuously 24/7 in background
                 # Fetch latest prices for pairs from Redis
                 dashboard_data = []
                 for pair in settings.PAIRS:
@@ -70,18 +73,79 @@ async def broadcast_loop():
                             # Higher short liq = higher probability of short squeeze = bullish
                             liq_score = (short_liq / (short_liq + long_liq)) * 100
                             
-                        valid_prices = [d['price'] for d in prices.values() if d.get('price', 0) > 0]
+                        valid_prices = []
+                        valid_exchanges_map = {}
+                        for ex, d in prices.items():
+                            p = d.get('price', 0)
+                            b = d.get('bid', 0)
+                            a = d.get('ask', 0)
+                            if p > 0 and b > 0 and a > 0:
+                                # Filter out illiquid venues where internal bid-ask spread is > 2%
+                                internal_spread = (a - b) / b
+                                if internal_spread <= 0.02:
+                                    valid_prices.append(p)
+                                    valid_exchanges_map[ex] = d
+                                    
                         lagging_exchange = None
                         lagging_diff_pct = 0
+                        cheapest_exchange = "N/A"
+                        dearest_exchange = "N/A"
+                        gross_spread_pct = 0.0
+                        cheapest_status = "Fair Value"
+                        dearest_status = "Fair Value"
+                        
                         if len(valid_prices) >= 2:
                             max_p = max(valid_prices)
                             min_p = min(valid_prices)
+                            sorted_p = sorted(valid_prices)
+                            median_p = sorted_p[len(sorted_p)//2]
                             
-                            for ex, d in prices.items():
+                            gross_spread_pct = ((max_p - min_p) / min_p) * 100
+                            
+                            for ex, d in valid_exchanges_map.items():
                                 if d.get('price') == min_p:
                                     lagging_exchange = ex
+                                    cheapest_exchange = ex
                                     lagging_diff_pct = ((max_p - min_p) / min_p) * 100
-                                    break
+                                elif d.get('price') == max_p:
+                                    dearest_exchange = ex
+                                    
+                            if median_p > 0:
+                                cheapest_diff = ((min_p - median_p) / median_p) * 100
+                                dearest_diff = ((max_p - median_p) / median_p) * 100
+                                
+                                if cheapest_diff <= -0.5:
+                                    cheapest_status = f"Underpriced (-{abs(round(cheapest_diff, 2))}%)"
+                                else:
+                                    cheapest_status = "Fair Value"
+                                    
+                                if dearest_diff >= 0.5:
+                                    dearest_status = f"Overpriced (+{round(dearest_diff, 2)}%)"
+                                else:
+                                    dearest_status = "Fair Value"
+                                    
+                            # Tracking Underpriced Mean Reversion (Alpha Snap)
+                            snap_growth_pct = 0.0
+                            if cheapest_exchange and cheapest_exchange != "N/A":
+                                track_key = f"track:underpriced:{pair}:{cheapest_exchange}"
+                                cached_track = redis_client.get(track_key)
+                                current_min_p = min_p
+                                
+                                if cached_track:
+                                    track_data = json.loads(cached_track)
+                                    start_p = track_data["start_price"]
+                                    
+                                    if current_min_p > start_p:
+                                        snap_growth_pct = ((current_min_p - start_p) / start_p) * 100
+                                        
+                                    if current_min_p >= median_p:
+                                        redis_client.delete(track_key)
+                                elif cheapest_diff < -0.1: # Underpriced by > 0.1% vs median
+                                    redis_client.set(track_key, json.dumps({
+                                        "ts": datetime.now(timezone.utc).isoformat(),
+                                        "start_price": current_min_p,
+                                        "start_median": median_p
+                                    }), ex=300)
                                     
                         confidence = (vol_score * 0.6) + (liq_score * 0.4)
                         if lagging_diff_pct > 0.1:
@@ -103,7 +167,13 @@ async def broadcast_loop():
                             "confidence": round(confidence, 1),
                             "recommendation": recommendation,
                             "lagging_exchange": lagging_exchange if lagging_diff_pct > 0.1 else None,
-                            "lagging_diff": round(lagging_diff_pct, 2)
+                            "lagging_diff": round(lagging_diff_pct, 2),
+                            "gross_spread_pct": round(gross_spread_pct, 2),
+                            "cheapest_exchange": cheapest_exchange,
+                            "cheapest_status": cheapest_status,
+                            "dearest_exchange": dearest_exchange,
+                            "dearest_status": dearest_status,
+                            "mean_reversion_growth": round(snap_growth_pct, 2)
                         }
 
                         dashboard_data.append({
@@ -156,14 +226,15 @@ async def broadcast_loop():
                                 opp["alert_message"] = narrative
                                 dashboard_data[-1]["opportunity"] = opp
                         
-                        # Tactical 5% Lagging Execution Alert Check
-                        if not opp and recommendation in ["BUY", "STRONG BUY"] and lagging_diff_pct >= 5.0:
+                        # Tactical 0.5% Underpriced Execution Alert Check (Agent Action)
+                        if not opp and recommendation in ["BUY", "STRONG BUY"] and lagging_diff_pct >= 0.5 and cheapest_status.startswith("Underpriced"):
                             cooldown_key = f"cooldown_lag:{pair}"
                             if not redis_client.get(cooldown_key):
                                 narrative = (
-                                    f"🚀 QUANT EXECUTION SIGNAL: {pair}\n"
+                                    f"🚀 AGENT EXECUTION ALERT (0.5% Underpriced Gate): {pair}\n"
                                     f"⚡ Signal: {recommendation} ({round(confidence)}% Confidence)\n"
                                     f"🎯 Target Buy: {lagging_exchange} (Lagging discount: -{round(lagging_diff_pct, 2)}%)\n"
+                                    f"📊 Valuation Baseline: {cheapest_status}\n"
                                     f"⏱ Immediate automated entry recommended within ~10ms window."
                                 )
                                 logger.info(f"Lagging Execution Signal: {narrative}")
@@ -189,17 +260,47 @@ async def broadcast_loop():
                 macro_data_str = redis_client.get("global:macro_sentiment")
                 macro_data = json.loads(macro_data_str) if macro_data_str else None
                 
-                for conn in active_connections:
-                    await conn.send_json({
-                        "type": "update", 
-                        "data": dashboard_data,
-                        "global": {"fng": fng, "macro": macro_data}
-                    })
+                now_utc = datetime.now(timezone.utc)
+                utc_hour = now_utc.hour
+                utc_day = now_utc.weekday()
+                
+                if utc_day >= 5:
+                    session_name = "🔴 Weekend / Pre-Asia Twilight"
+                    session_status = "Low Volume & Liquidity Regime"
+                elif 0 <= utc_hour < 8:
+                    session_name = "🟡 Tokyo / Hong Kong Session"
+                    session_status = "Active Asian Liquidity"
+                elif 8 <= utc_hour < 13:
+                    session_name = "🟢 London / European Session"
+                    session_status = "Peak Core Liquidity"
+                elif 13 <= utc_hour < 17:
+                    session_name = "🔵 NY / London Overlap (The Golden Window)"
+                    session_status = "Maximum Global Volatility & Volume"
+                elif 17 <= utc_hour < 21:
+                    session_name = "🟣 New York Afternoon Session"
+                    session_status = "US Institutional Flow"
+                else:
+                    session_name = "⚪ Post-NY Twilight"
+                    session_status = "Algorithmic Rebalancing Window"
+                    
+                session_data = {
+                    "name": session_name,
+                    "status": session_status,
+                    "utc_time": now_utc.strftime("%H:%M UTC")
+                }
+                
+                if active_connections and cycle_counter % 5 == 0:
+                    for conn in active_connections:
+                        await conn.send_json({
+                            "type": "update", 
+                            "data": dashboard_data,
+                            "global": {"fng": fng, "macro": macro_data, "market_session": session_data}
+                        })
                     
         except Exception as e:
             logger.error(f"Broadcast loop error: {e}")
             
-        await asyncio.sleep(0.5) # 500ms cycle
+        await asyncio.sleep(0.05) # 50ms HFT execution cycle (20 checks per second!)
 
 @app.on_event("startup")
 async def startup_event():
