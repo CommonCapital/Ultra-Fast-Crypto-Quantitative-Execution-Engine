@@ -13,6 +13,7 @@ from .collectors.bingx import start_bingx_collector
 from .collectors.coinbase import start_coinbase_collector
 from .collectors.okx import start_okx_collector
 from .collectors.bitmex import start_bitmex_collector
+from .collectors.news_sentiment import start_news_sentiment_collector
 from .collectors.global_metrics import start_global_metrics_collector
 from .engine.arbitrage import ArbitrageDetector
 from .integrations.deepseek import generate_narrative
@@ -154,16 +155,45 @@ async def broadcast_loop():
                                 redis_client.setex(cooldown_key, 300, "1") # 5 min cooldown
                                 opp["alert_message"] = narrative
                                 dashboard_data[-1]["opportunity"] = opp
+                        
+                        # Tactical 5% Lagging Execution Alert Check
+                        if not opp and recommendation in ["BUY", "STRONG BUY"] and lagging_diff_pct >= 5.0:
+                            cooldown_key = f"cooldown_lag:{pair}"
+                            if not redis_client.get(cooldown_key):
+                                narrative = (
+                                    f"🚀 QUANT EXECUTION SIGNAL: {pair}\n"
+                                    f"⚡ Signal: {recommendation} ({round(confidence)}% Confidence)\n"
+                                    f"🎯 Target Buy: {lagging_exchange} (Lagging discount: -{round(lagging_diff_pct, 2)}%)\n"
+                                    f"⏱ Immediate automated entry recommended within ~10ms window."
+                                )
+                                logger.info(f"Lagging Execution Signal: {narrative}")
+                                print("\n" + "="*40)
+                                print(narrative)
+                                print("="*40 + "\n")
+                                
+                                tactical_opp = {
+                                    "spread_pct": round(lagging_diff_pct, 2),
+                                    "buy_exchange": lagging_exchange,
+                                    "buy_price": min_p,
+                                    "sell_exchange": "Global Top",
+                                    "sell_price": max_p,
+                                    "alert_message": narrative
+                                }
+                                redis_client.setex(cooldown_key, 60, "1") # 60 sec cooldown for lagging alerts
+                                dashboard_data[-1]["opportunity"] = tactical_opp
                 
                 # Broadcast
                 fng_data_str = redis_client.get("global:fng")
                 fng = json.loads(fng_data_str) if fng_data_str else None
                 
+                macro_data_str = redis_client.get("global:macro_sentiment")
+                macro_data = json.loads(macro_data_str) if macro_data_str else None
+                
                 for conn in active_connections:
                     await conn.send_json({
                         "type": "update", 
                         "data": dashboard_data,
-                        "global": {"fng": fng}
+                        "global": {"fng": fng, "macro": macro_data}
                     })
                     
         except Exception as e:
@@ -186,6 +216,7 @@ async def startup_event():
     asyncio.create_task(start_coinbase_collector(redis_client, settings.PAIRS))
     asyncio.create_task(start_okx_collector(redis_client, settings.PAIRS))
     asyncio.create_task(start_bitmex_collector(redis_client, settings.PAIRS))
+    asyncio.create_task(start_news_sentiment_collector(redis_client, settings.PAIRS))
     asyncio.create_task(start_global_metrics_collector(redis_client, settings.PAIRS))
 
 @app.on_event("shutdown")

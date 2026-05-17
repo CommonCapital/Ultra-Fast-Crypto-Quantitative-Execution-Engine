@@ -17,6 +17,7 @@ When high-conviction dislocations are detected that pass strict fee-adjusted pro
   * **Clear Growth Momentum**: Evaluates live Binance trade streams to ensure `Recent Buy Volume > Recent Sell Volume` before firing an alert.
   * **Real-Time L2 Liquidity Squeeze**: Evaluates the live Coinbase Level-2 order book dynamically, comparing the total dollar value of the Sell Liquidity pool against the Buy Liquidity pool to ensure upward price pressure.
 * **Global Macro Context**: Enriches alerts by fetching the real-time **Fear & Greed Index** (via Alternative.me) and **Global 24h Volume** (via CoinMarketCap API). *Note: CMC is queried exactly once every 5 minutes to guarantee it stays 100% free under their 10,000 credit/month limit.*
+* **Geopolitical & Macro News Sentiment**: Asynchronously parses public RSS feeds (CoinTelegraph, CoinDesk) every 60 seconds. Evaluates institutional NLP keyword weights (e.g. `war`, `sec lawsuit`, `etf approval`, `rate cut`) to maintain a real-time macro risk rating (-100 to +100).
 * **Premium Dashboard**: A beautifully designed, glassmorphic React/Vite dashboard running on vanilla CSS to monitor the live Exchange Matrix and Terminal-style alert logs.
 
 ---
@@ -31,6 +32,7 @@ The **Action Recommendation Engine** generates a live `Confidence Score (0-100%)
 1. **The Flow Gate (60% Weight):** Evaluates Binance's live trade streams to ensure `Buyer Taker Volume > Seller Taker Volume` (indicating strong retail buying pressure).
 2. **The Liquidity Squeeze (40% Weight):** Evaluates Coinbase's Level-2 order book. Heavy Short Liquidity (Sell walls) compared to Long Liquidity (Buy walls) increases the probability of a violent short-squeeze.
 3. **The Lagging Exchange Alpha (Bonus Confidence):** Scans all 7 exchanges simultaneously. If it spots a single exchange lagging behind the global market maximum price by `> 0.1%`, it flags that exchange as a tactical **Target Buy**, anticipating a rapid price-snap to catch up to the aggregate market.
+4. **The Geopolitical Macro Gate (Situational Awareness & Future ML):** An asynchronous RSS aggregator scans global crypto and geopolitical feeds in the background. It utilizes strict regex word boundary NLP matching (`\bwar\b`, `\bbreakout\b`) to eliminate false substring matches. Because L2 scalping is a high-frequency microstructure play, news sentiment is explicitly isolated from short-term buy/sell recommendations. Instead, the top 10 live articles are streamed into a dedicated interactive **Newsletter Feed** at the bottom of the dashboard with clickable source citations.
 
 ### ⚡ Automated Millisecond Execution Mandate
 

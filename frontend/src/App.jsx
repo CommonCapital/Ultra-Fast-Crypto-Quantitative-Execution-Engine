@@ -8,7 +8,7 @@ function App() {
   const { data, globalData, status } = useWebSocket('ws://localhost:8000/ws');
   const [alerts, setAlerts] = useState([]);
   const [activePair, setActivePair] = useState('BTC/USDT');
-  
+
   // Find the selected pair data
   const primaryPairData = data.find(p => p.pair === activePair) || (data.length > 0 ? data[0] : null);
 
@@ -38,7 +38,7 @@ function App() {
   return (
     <div className="dashboard-container">
       <header>
-        <h1>CRYPTO ARBITRAGE PLATFORM</h1>
+        <h1>Ultra-Fast Crypto Quantitative Execution Engine</h1>
         <div className="status-bar">
           <div className="pulse" style={{ backgroundColor: status === 'Connected' ? 'var(--success)' : 'var(--danger)' }}></div>
           Status: {status}
@@ -51,24 +51,25 @@ function App() {
             {availablePairs.map(pair => {
               const pairHasAlert = data.find(p => p.pair === pair)?.opportunity != null;
               return (
-              <button 
-                key={pair}
-                onClick={() => setActivePair(pair)}
-                style={{
-                  background: activePair === pair ? 'var(--accent-primary)' : (pairHasAlert ? 'rgba(239, 68, 68, 0.2)' : 'transparent'),
-                  color: pairHasAlert && activePair !== pair ? '#ff6b6b' : 'white',
-                  border: pairHasAlert ? '1px solid var(--danger)' : '1px solid var(--accent-primary)',
-                  boxShadow: pairHasAlert ? '0 0 15px rgba(239, 68, 68, 0.6)' : (activePair === pair ? '0 0 10px var(--accent-glow)' : 'none'),
-                  padding: '0.5rem 1rem',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  transition: 'all 0.3s ease',
-                  fontWeight: pairHasAlert ? 'bold' : 'normal'
-                }}
-              >
-                {pair} {pairHasAlert && '🚨'}
-              </button>
-            )})}
+                <button
+                  key={pair}
+                  onClick={() => setActivePair(pair)}
+                  style={{
+                    background: activePair === pair ? 'var(--accent-primary)' : (pairHasAlert ? 'rgba(239, 68, 68, 0.2)' : 'transparent'),
+                    color: pairHasAlert && activePair !== pair ? '#ff6b6b' : 'white',
+                    border: pairHasAlert ? '1px solid var(--danger)' : '1px solid var(--accent-primary)',
+                    boxShadow: pairHasAlert ? '0 0 15px rgba(239, 68, 68, 0.6)' : (activePair === pair ? '0 0 10px var(--accent-glow)' : 'none'),
+                    padding: '0.5rem 1rem',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease',
+                    fontWeight: pairHasAlert ? 'bold' : 'normal'
+                  }}
+                >
+                  {pair} {pairHasAlert && '🚨'}
+                </button>
+              )
+            })}
           </div>
           <h2>Live Exchange Matrix — {primaryPairData?.pair || 'Loading...'}</h2>
           <PriceMatrix prices={primaryPairData?.prices || {}} />
@@ -99,7 +100,7 @@ function App() {
                 )}
               </div>
             </div>
-            
+
             <div className="signal-item">
               <div className="signal-label">Coinbase Orderbook Liq (L2)</div>
               <div className="signal-value" style={{ fontSize: '1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
@@ -146,6 +147,40 @@ function App() {
                 )}
               </div>
             </div>
+
+            <div className="signal-item" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
+              <div className="signal-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Geopolitics & Macro Sentiment</span>
+                <span style={{ 
+                  fontSize: '0.7rem', 
+                  padding: '2px 6px', 
+                  borderRadius: '4px', 
+                  fontWeight: 'bold',
+                  background: globalData?.macro?.score >= 20 ? 'rgba(16, 185, 129, 0.2)' : (globalData?.macro?.score <= -20 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(255,255,255,0.1)'),
+                  color: globalData?.macro?.score >= 20 ? 'var(--success)' : (globalData?.macro?.score <= -20 ? 'var(--danger)' : 'var(--text-muted)')
+                }}>
+                  {globalData?.macro?.status || 'Neutral'}
+                </span>
+              </div>
+              <div className="signal-value" style={{ fontSize: '1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Sentiment Score:</span>
+                  <span style={{ 
+                    fontWeight: 'bold', 
+                    color: globalData?.macro?.score > 0 ? 'var(--success)' : (globalData?.macro?.score < 0 ? 'var(--danger)' : 'inherit') 
+                  }}>
+                    {globalData?.macro ? `${globalData.macro.score > 0 ? '+' : ''}${globalData.macro.score}` : '0'}
+                  </span>
+                </div>
+                {globalData?.macro?.keyword_hits && globalData.macro.keyword_hits.length > 0 && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem', textAlign: 'left', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                    {globalData.macro.keyword_hits.map((hit, idx) => (
+                      <span key={idx} style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>{hit}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -154,6 +189,51 @@ function App() {
             <ArbAlert opportunity={primaryPairData.opportunity} />
           </section>
         )}
+
+        <section className="panel" style={{ marginTop: '2rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #333', paddingBottom: '0.8rem', marginBottom: '1rem' }}>
+            <h2 style={{ margin: 0 }}>📰 Live Market & Geopolitical Newsletter Feed</h2>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Real-time NLP situational awareness</span>
+          </div>
+          {globalData?.macro?.top_headlines && globalData.macro.top_headlines.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              {globalData.macro.top_headlines.map((article, idx) => {
+                const title = typeof article === 'string' ? article : article.title;
+                const link = typeof article === 'string' ? '#' : article.link;
+                const summary = typeof article === 'string' ? 'AI News Radar: Scanned for high-impact liquidity and macro risk catalysts.' : article.summary;
+                
+                return (
+                  <a key={idx} href={link} target="_blank" rel="noreferrer" style={{ 
+                    padding: '1rem', 
+                    background: 'rgba(255,255,255,0.03)', 
+                    border: '1px solid rgba(255,255,255,0.08)', 
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '1rem',
+                    transition: 'all 0.2s ease',
+                    textDecoration: 'none',
+                    color: 'inherit'
+                  }}
+                  onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.borderColor = 'var(--accent-primary)'; }}
+                  onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                  >
+                    <span style={{ fontSize: '1.5rem', marginTop: '2px' }}>🗞️</span>
+                    <div style={{ flex: 1, textAlign: 'left' }}>
+                      <div style={{ fontWeight: '600', color: 'var(--text-main)', fontSize: '1rem', marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>{title}</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)' }}>Read Article ↗</span>
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>{summary}</div>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ padding: '2rem', color: 'var(--text-muted)', textAlign: 'center' }}>Connecting to live news aggregators...</div>
+          )}
+        </section>
       </main>
 
       <aside>

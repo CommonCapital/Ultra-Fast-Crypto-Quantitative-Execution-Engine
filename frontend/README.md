@@ -1,16 +1,24 @@
-# React + Vite
+# 🖥️ Ultra-Fast Crypto Arbitrage & Quantitative Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The frontend interface for the Ultra-Fast Crypto Quantitative Execution Platform. Engineered with React, Vite, and Vanilla CSS to deliver sub-millisecond visual tick rendering, real-time Level-2 liquidity monitoring, and live geopolitical sentiment awareness.
 
-Currently, two official plugins are available:
+## ✨ Premium UI & Architecture Highlights
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+* **Sub-Millisecond Data Ingestion:** Connects directly via WebSockets (`ws://localhost:8000/ws`) to receive 500ms multi-exchange orderbook updates.
+* **Multi-Venue Price Matrix:** Instant visual comparison across 7 top global exchanges (Binance, Bybit, OKX, Coinbase, MEXC, BitMEX, BingX).
+* **Situational Awareness Ticker:** Dedicated interactive newsletter stream pulling live articles from Google News RSS aggregators with AI keyword tagging and clickable source references.
+* **Lagging Exchange Alpha Radar:** Live tactical alert log capturing sub-millisecond execution opportunities whenever an exchange lags >= 5% behind global top liquidity.
 
-## React Compiler
+## 🚀 Running Locally
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+# Install dependencies
+npm install
 
-## Expanding the ESLint configuration
+# Start Vite dev server (runs on port 5173 by default)
+npm run dev
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## 🎨 Design System
+
+Built strictly using modern Vanilla CSS (`index.css`) featuring deep dark modes (`#0B0E14`), glassmorphism panels, and HSL tailored color palettes for institutional aesthetic excellence.
