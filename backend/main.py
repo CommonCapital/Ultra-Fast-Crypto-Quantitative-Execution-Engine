@@ -86,9 +86,13 @@ async def broadcast_loop():
                     
                     if prices:
                         # --- Momentum & Lagging Engine ---
+                        # Global momentum from Binance (reference venue for market direction)
                         binance_data = prices.get('Binance', {})
-                        buy_vol = binance_data.get('buy_vol', 0)
-                        sell_vol = binance_data.get('sell_vol', 0)
+                        global_buy_vol = binance_data.get('buy_vol', 0)
+                        global_sell_vol = binance_data.get('sell_vol', 0)
+                        # Use global binance data as initial vol_score basis (updated later once cheapest is known)
+                        buy_vol = global_buy_vol
+                        sell_vol = global_sell_vol
                         vol_score = 50
                         if buy_vol + sell_vol > 0:
                             vol_score = (buy_vol / (buy_vol + sell_vol)) * 100
@@ -210,6 +214,17 @@ async def broadcast_loop():
                                     }), ex=180)
                                     liquidity_pull_status = f"Sniping Initial Discount ({round(cheapest_diff, 2)}% Dislocation ⚡)"
                                     
+                        # --- Buy-Venue Specific Toxic Flow Check ---
+                        # Once cheapest_exchange is identified, pull ITS volume data.
+                        # Whale sell dominance on the buy venue means price is underpriced BECAUSE
+                        # of active dumping — a falling knife, NOT a mean-reversion opportunity.
+                        buy_venue_data = valid_exchanges_map.get(cheapest_exchange, prices.get(cheapest_exchange, {}))
+                        venue_buy_vol = buy_venue_data.get('buy_vol', 0)
+                        venue_sell_vol = buy_venue_data.get('sell_vol', 0)
+                        # If buy-venue has no venue-specific vol, fall back to global Binance vol
+                        buy_vol = venue_buy_vol if (venue_buy_vol + venue_sell_vol) > 0 else global_buy_vol
+                        sell_vol = venue_sell_vol if (venue_buy_vol + venue_sell_vol) > 0 else global_sell_vol
+
                         confidence = (vol_score * 0.6) + (liq_score * 0.4)
                         if lagging_diff_pct > 0.1:
                             confidence += min(15, lagging_diff_pct * 10)
@@ -298,7 +313,11 @@ async def broadcast_loop():
                         # Liquidity Pool Squeeze Exhaustion Filter: Do not execute long entry if short stop-losses/liquidation pools have already been tapped or if long liquidation overhang is severe
                         liquidity_pool_exhausted = ("Cascade Dump Risk" in stop_loss_pool_status) or (short_liq > 0 and long_liq > short_liq * 1.3)
                         
-                        # Toxic Flow / Falling Knife Filter: Ensure global volume isn't dominated by massive sell-offs
+                        # Toxic Flow / Falling Knife Filter (Buy-Venue Specific):
+                        # If the cheapest (buy) venue shows sell-side dominance, this means the
+                        # price is underpriced BECAUSE whales are actively dumping there.
+                        # This is a falling knife — the price will likely keep going DOWN, not revert.
+                        # Seller dominance threshold: sell vol > 1.5x buy vol on the entry venue.
                         toxic_flow_detected = (sell_vol > 0 and sell_vol > buy_vol * 1.5) or (buy_vol == 0 and sell_vol > 0)
                         
                         abs_underpricing_pct = abs(cheapest_diff) if median_p > 0 and cheapest_diff < 0 else 0.0
@@ -398,7 +417,7 @@ async def broadcast_loop():
                                     f"🎯 Target Entry Venue: {cheapest_exchange} at {cheapest_status} discount\n"
                                     f"📊 Fee Structure: {round(exchange_taker_fee_pct, 2)}% taker fee per trade ({round(round_trip_fee_pct, 2)}% round-trip drag)\n"
                                     f"🛡️ Liquidation Squeeze Filter: PASSED ({stop_loss_pool_status}) - Upward short stop-loss magnet active!\n"
-                                    f"🌊 Toxic Flow Filter: PASSED (Buy Vol: {round(buy_vol, 2)} | Sell Vol: {round(sell_vol, 2)}) - No dump detected!\n"
+                                    f"🌊 Toxic Flow Filter [{cheapest_exchange}]: PASSED (Buy Vol: {round(buy_vol, 2)} | Sell Vol: {round(sell_vol, 2)}) — Volume on buy venue is NOT whale-sell dominated. Mean reversion valid.\n"
                                     f"📈 Execution Gate: -{round(required_gross_discount, 2)}% minimum gross discount from global fair median required to guarantee >= {round(target_net_profit, 2)}% net bottom-line profit.\n"
                                     f"💰 Status: Venue underpricing (-{round(abs_underpricing_pct, 2)}%) successfully passed net profit gate! Immediate sniper entry triggered."
                                 )
