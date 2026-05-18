@@ -38,9 +38,13 @@ class Settings:
             "secret": os.getenv("OKX_SECRET_KEY", ""),
             "password": os.getenv("OKX_PASSPHRASE", "")
         },
-        "BitMEX": {
-            "apiKey": os.getenv("BITMEX_API_KEY", ""),
-            "secret": os.getenv("BITMEX_SECRET_KEY", "")
+        "HTX": {
+            "apiKey": os.getenv("HTX_API_KEY", ""),
+            "secret": os.getenv("HTX_SECRET_KEY", "")
+        },
+        "Bitunix": {
+            "apiKey": os.getenv("BITUNIX_API_KEY", ""),
+            "secret": os.getenv("BITUNIX_SECRET_KEY", "")
         }
     }
     
@@ -56,7 +60,8 @@ class Settings:
         "BingX": 0.001,
         "Coinbase": 0.004, # Advanced trade standard taker fee
         "OKX": 0.001,
-        "BitMEX": 0.001
+        "HTX": 0.002,    # 0.20% standard taker fee
+        "Bitunix": 0.001  # 0.10% standard taker fee
     }
     
     # Pairs to track (24 High-Volume Assets across L1s, Memes, AI, DeFi, and Majors)

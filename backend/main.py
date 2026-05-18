@@ -14,7 +14,8 @@ from .collectors.mexc import start_mexc_collector
 from .collectors.bingx import start_bingx_collector
 from .collectors.coinbase import start_coinbase_collector
 from .collectors.okx import start_okx_collector
-from .collectors.bitmex import start_bitmex_collector
+from .collectors.htx import start_htx_collector
+from .collectors.bitunix import start_bitunix_collector
 from .collectors.news_sentiment import start_news_sentiment_collector
 from .collectors.global_metrics import start_global_metrics_collector
 from .engine.arbitrage import ArbitrageDetector
@@ -49,6 +50,9 @@ class TrailingTargetPayload(BaseModel):
 class DCATargetPayload(BaseModel):
     target_pct: float
 
+class CapitalPayload(BaseModel):
+    capital_usdt: float
+
 @app.post("/api/config/net-profit")
 async def set_net_profit_target(payload: ProfitTargetPayload):
     target = max(0.01, min(10.0, payload.target_pct))
@@ -67,6 +71,23 @@ async def set_dca_drop_target(payload: DCATargetPayload):
     redis_client.set("config:dca_drop_threshold_pct", str(target))
     return {"status": "success", "target_pct": target}
 
+@app.post("/api/config/capital-per-unit")
+async def set_capital_per_unit(payload: CapitalPayload):
+    capital = max(10.0, min(100000.0, payload.capital_usdt))
+    redis_client.set("config:capital_per_unit", str(capital))
+    return {"status": "success", "capital_usdt": capital}
+
+@app.get("/api/portfolio/stats")
+async def get_portfolio_stats():
+    stats_str = redis_client.get("stats:portfolio")
+    return json.loads(stats_str) if stats_str else {}
+
+@app.delete("/api/portfolio/history")
+async def clear_trade_history():
+    redis_client.delete("trades:history")
+    redis_client.delete("stats:portfolio")
+    return {"status": "cleared"}
+
 async def broadcast_loop():
     """Background task to broadcast state to WS clients and detect arbitrage."""
     cycle_counter = 0
@@ -79,7 +100,7 @@ async def broadcast_loop():
                 for pair in settings.PAIRS:
                     symbol = pair.replace('/', '')
                     prices = {}
-                    for ex in ['Binance', 'Bybit', 'MEXC', 'BingX', 'Coinbase', 'OKX', 'BitMEX']:
+                    for ex in ['Binance', 'Bybit', 'MEXC', 'BingX', 'Coinbase', 'OKX', 'HTX', 'Bitunix']:
                         raw_tick = redis_client.get(f"tick:{ex}:{symbol}")
                         if raw_tick:
                             prices[ex] = json.loads(raw_tick)
@@ -88,8 +109,8 @@ async def broadcast_loop():
                         # --- Momentum & Lagging Engine ---
                         # Global momentum from Binance (reference venue for market direction)
                         binance_data = prices.get('Binance', {})
-                        global_buy_vol = binance_data.get('buy_vol', 0)
-                        global_sell_vol = binance_data.get('sell_vol', 0)
+                        global_buy_vol = float(binance_data.get('buy_vol') or 0)
+                        global_sell_vol = float(binance_data.get('sell_vol') or 0)
                         # Use global binance data as initial vol_score basis (updated later once cheapest is known)
                         buy_vol = global_buy_vol
                         sell_vol = global_sell_vol
@@ -98,8 +119,8 @@ async def broadcast_loop():
                             vol_score = (buy_vol / (buy_vol + sell_vol)) * 100
                             
                         coinbase_data = prices.get('Coinbase', {})
-                        short_liq = coinbase_data.get('short_liq', 0)
-                        long_liq = coinbase_data.get('long_liq', 0)
+                        short_liq = float(coinbase_data.get('short_liq') or 0)
+                        long_liq = float(coinbase_data.get('long_liq') or 0)
                         liq_score = 50
                         stop_loss_pool_status = "Balanced L2 Book"
                         if short_liq + long_liq > 0:
@@ -115,9 +136,9 @@ async def broadcast_loop():
                         valid_prices = []
                         valid_exchanges_map = {}
                         for ex, d in prices.items():
-                            p = d.get('price', 0)
-                            b = d.get('bid', 0)
-                            a = d.get('ask', 0)
+                            p = float(d.get('price') or 0)
+                            b = float(d.get('bid') or 0)
+                            a = float(d.get('ask') or 0)
                             if p > 0 and b > 0 and a > 0:
                                 # Filter out illiquid venues where internal bid-ask spread is > 2%
                                 internal_spread = (a - b) / b
@@ -219,8 +240,8 @@ async def broadcast_loop():
                         # Whale sell dominance on the buy venue means price is underpriced BECAUSE
                         # of active dumping — a falling knife, NOT a mean-reversion opportunity.
                         buy_venue_data = valid_exchanges_map.get(cheapest_exchange, prices.get(cheapest_exchange, {}))
-                        venue_buy_vol = buy_venue_data.get('buy_vol', 0)
-                        venue_sell_vol = buy_venue_data.get('sell_vol', 0)
+                        venue_buy_vol = float(buy_venue_data.get('buy_vol') or 0)
+                        venue_sell_vol = float(buy_venue_data.get('sell_vol') or 0)
                         # If buy-venue has no venue-specific vol, fall back to global Binance vol
                         buy_vol = venue_buy_vol if (venue_buy_vol + venue_sell_vol) > 0 else global_buy_vol
                         sell_vol = venue_sell_vol if (venue_buy_vol + venue_sell_vol) > 0 else global_sell_vol
@@ -266,8 +287,8 @@ async def broadcast_loop():
                         opp = arb_detector.check_opportunity(pair, prices)
                         if opp:
                             # Local MVP Alert Narrative (No DeepSeek/Telegram)
-                            short_liq = opp.get('cb_short_liq', 0)
-                            long_liq = opp.get('cb_long_liq', 0)
+                            short_liq = float(opp.get('cb_short_liq') or 0)
+                            long_liq = float(opp.get('cb_long_liq') or 0)
                             liq_diff = short_liq - long_liq
                             
                             # Pull Global Metrics
@@ -310,8 +331,12 @@ async def broadcast_loop():
                         round_trip_fee_pct = exchange_taker_fee_pct * 2
                         required_gross_discount = target_net_profit + round_trip_fee_pct
                         
-                        # Liquidity Pool Squeeze Exhaustion Filter: Do not execute long entry if short stop-losses/liquidation pools have already been tapped or if long liquidation overhang is severe
-                        liquidity_pool_exhausted = ("Cascade Dump Risk" in stop_loss_pool_status) or (short_liq > 0 and long_liq > short_liq * 1.3)
+                        # Liquidity Pool Squeeze Exhaustion Filter
+                        # Re-read short_liq/long_liq from coinbase_data (not opp) to avoid using
+                        # reassigned None values from the arbitrage opportunity block above.
+                        _cl_short = float(coinbase_data.get('short_liq') or 0)
+                        _cl_long = float(coinbase_data.get('long_liq') or 0)
+                        liquidity_pool_exhausted = ("Cascade Dump Risk" in stop_loss_pool_status) or (_cl_short > 0 and _cl_long > _cl_short * 1.3)
                         
                         # Toxic Flow / Falling Knife Filter (Buy-Venue Specific):
                         # If the cheapest (buy) venue shows sell-side dominance, this means the
@@ -378,6 +403,27 @@ async def broadcast_loop():
                                 if hard_floor_triggered or trailing_triggered:
                                     exit_reason = "HARD FLOOR PRESERVATION" if hard_floor_triggered else "TRAILING TAKE-PROFIT"
                                     logger.info(f"🎯 AUTONOMOUS {exit_reason} EXIT: {pair} closed on {venue} at +{round(net_profit_pct, 2)}% net profit! (Peak was ${highest_p})")
+                                    # Log closed trade to history (deduped by position_key)
+                                    usdt_deployed = float(pos_data.get('usdt_deployed') or 0)
+                                    net_pnl_usdt = round(usdt_deployed * net_profit_pct / 100.0, 4)
+                                    trade_record = json.dumps({
+                                        "position_key": position_key,
+                                        "pair": pair,
+                                        "venue": venue,
+                                        "entry_price": avg_entry_p,
+                                        "exit_price": current_venue_bid,
+                                        "net_profit_pct": round(net_profit_pct, 4),
+                                        "usdt_deployed": usdt_deployed,
+                                        "net_pnl_usdt": net_pnl_usdt,
+                                        "exit_reason": exit_reason,
+                                        "ts": datetime.now(timezone.utc).isoformat()
+                                    })
+                                    # Deduplication: only log if this position_key not already in last 500 trades
+                                    existing = redis_client.lrange("trades:history", 0, 499)
+                                    already_logged = any(position_key in e for e in existing)
+                                    if not already_logged:
+                                        redis_client.lpush("trades:history", trade_record)
+                                        redis_client.ltrim("trades:history", 0, 999)  # keep last 1000
                                     redis_client.delete(position_key)
                                 else:
                                     # Keep UI banner alive showing active running trade
@@ -439,6 +485,9 @@ async def broadcast_loop():
                                     base_multiplier = 2.0
 
                                 # Lock inventory position in Redis to prevent duplicate buy orders
+                                raw_capital = redis_client.get("config:capital_per_unit")
+                                capital_per_unit = float(raw_capital) if raw_capital else 1000.0
+                                usdt_deployed = round(capital_per_unit * base_multiplier, 2)
                                 redis_client.setex(position_key, 3600, json.dumps({
                                     "status": "OPEN",
                                     "entry_price": actual_buy_price,
@@ -447,6 +496,7 @@ async def broadcast_loop():
                                     "venue": cheapest_exchange,
                                     "volume": base_multiplier,
                                     "multiplier": base_multiplier,
+                                    "usdt_deployed": usdt_deployed,
                                     "ts": datetime.now(timezone.utc).isoformat()
                                 }))
                                 
@@ -494,18 +544,68 @@ async def broadcast_loop():
                     "utc_time": now_utc.strftime("%H:%M UTC")
                 }
                 
+                # --- Portfolio Stats Aggregation (every 10 cycles = ~500ms) ---
+                portfolio_stats = {}
+                if cycle_counter % 10 == 0:
+                    open_keys = redis_client.keys("agent:position:*")
+                    total_deployed = 0.0
+                    unrealized_pnl = 0.0
+                    raw_cap = redis_client.get("config:capital_per_unit")
+                    cap_per_unit = float(raw_cap) if raw_cap else 1000.0
+                    for pk in open_keys:
+                        pd_str = redis_client.get(pk)
+                        if pd_str:
+                            pd = json.loads(pd_str)
+                            dep = float(pd.get('usdt_deployed') or cap_per_unit * float(pd.get('multiplier', 1.0)))
+                            total_deployed += dep
+                            # Best-effort unrealized PnL from current prices
+                            _pair = pk.replace('agent:position:', '')
+                            _venue = pd.get('venue', '')
+                            _avg_e = float(pd.get('avg_entry_price') or 0)
+                            _tick_str = redis_client.get(f"tick:{_venue}:{_pair.replace('/', '')}")
+                            if _tick_str and _avg_e > 0:
+                                _tick = json.loads(_tick_str)
+                                _cur = float(_tick.get('bid') or _tick.get('price') or 0)
+                                _fee = (settings.EXCHANGE_FEES.get(_venue, 0.001)) * 2 * 100
+                                _net_pct = ((_cur - _avg_e) / _avg_e * 100) - _fee
+                                unrealized_pnl += dep * _net_pct / 100.0
+                    # Closed trades history
+                    history = redis_client.lrange("trades:history", 0, 999)
+                    realized_pnl = 0.0
+                    wins = 0
+                    for h in history:
+                        t = json.loads(h)
+                        realized_pnl += float(t.get('net_pnl_usdt') or 0)
+                        if float(t.get('net_profit_pct') or 0) > 0:
+                            wins += 1
+                    trade_count = len(history)
+                    win_rate = round((wins / trade_count * 100), 1) if trade_count > 0 else 0.0
+                    portfolio_stats = {
+                        "total_deployed_usdt": round(total_deployed, 2),
+                        "unrealized_pnl_usdt": round(unrealized_pnl, 4),
+                        "realized_pnl_usdt": round(realized_pnl, 4),
+                        "total_pnl_usdt": round(realized_pnl + unrealized_pnl, 4),
+                        "trade_count": trade_count,
+                        "win_rate": win_rate,
+                        "capital_per_unit": cap_per_unit,
+                        "open_positions": len(open_keys)
+                    }
+                    redis_client.set("stats:portfolio", json.dumps(portfolio_stats))
+
                 if active_connections and cycle_counter % 5 == 0:
+                    cached_stats = redis_client.get("stats:portfolio")
                     for conn in active_connections:
                         await conn.send_json({
-                            "type": "update", 
+                            "type": "update",
                             "data": dashboard_data,
                             "global": {
-                                "fng": fng, 
-                                "macro": macro_data, 
-                                "market_session": session_data, 
+                                "fng": fng,
+                                "macro": macro_data,
+                                "market_session": session_data,
                                 "target_net_profit": target_net_profit if 'target_net_profit' in locals() else settings.MIN_NET_SPREAD,
                                 "trailing_pullback_pct": trailing_pullback_pct if 'trailing_pullback_pct' in locals() else 0.2,
-                                "dca_drop_threshold_pct": dca_drop_threshold_pct if 'dca_drop_threshold_pct' in locals() else 5.0
+                                "dca_drop_threshold_pct": dca_drop_threshold_pct if 'dca_drop_threshold_pct' in locals() else 5.0,
+                                "portfolio": json.loads(cached_stats) if cached_stats else {}
                             }
                         })
                     
@@ -528,7 +628,8 @@ async def startup_event():
     asyncio.create_task(start_bingx_collector(redis_client, settings.PAIRS))
     asyncio.create_task(start_coinbase_collector(redis_client, settings.PAIRS))
     asyncio.create_task(start_okx_collector(redis_client, settings.PAIRS))
-    asyncio.create_task(start_bitmex_collector(redis_client, settings.PAIRS))
+    asyncio.create_task(start_htx_collector(redis_client, settings.PAIRS))
+    asyncio.create_task(start_bitunix_collector(redis_client, settings.PAIRS))
     asyncio.create_task(start_news_sentiment_collector(redis_client, settings.PAIRS))
     asyncio.create_task(start_global_metrics_collector(redis_client, settings.PAIRS))
 

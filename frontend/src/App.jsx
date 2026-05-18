@@ -3,6 +3,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { PriceMatrix } from './components/PriceMatrix';
 import { ArbAlert } from './components/ArbAlert';
 import { AlertLog } from './components/AlertLog';
+import { PortfolioStats } from './components/PortfolioStats';
 
 function App() {
   const { data, globalData, status } = useWebSocket('ws://localhost:8000/ws');
@@ -69,6 +70,18 @@ function App() {
       } catch (err) {
         console.error("Error setting DCA drop:", err);
       }
+    }
+  };
+
+  const handleCapitalChange = async (val) => {
+    try {
+      await fetch('http://localhost:8000/api/config/capital-per-unit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capital_usdt: val })
+      });
+    } catch (err) {
+      console.error('Error setting capital per unit:', err);
     }
   };
 
@@ -177,6 +190,10 @@ function App() {
       </header>
 
       <main className="main-content">
+        <PortfolioStats
+          portfolio={globalData?.portfolio}
+          onCapitalChange={handleCapitalChange}
+        />
         <section className="panel">
           <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', borderBottom: '1px solid #333', paddingBottom: '1rem' }}>
             {availablePairs.map(pair => {
